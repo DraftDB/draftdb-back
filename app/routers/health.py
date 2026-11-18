@@ -21,7 +21,7 @@ class HealthResponse(BaseModel):
     responses={503: {"model": HealthResponse, "description": "Base de données injoignable"}},
     summary="Vérifier que l'API et la base répondent",
 )
-def health(db: Session = Depends(get_db)):
+def health(db: Annotated[Session, Depends(get_db)]):
     try:
         db.execute(text("SELECT 1"))
     except SQLAlchemyError:
