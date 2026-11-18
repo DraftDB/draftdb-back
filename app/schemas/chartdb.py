@@ -86,10 +86,17 @@ class Diagramme(ChartDBModel):
 
     @model_validator(mode="after")
     def verifier_coherence(self):
-        """Règles RG-12 à RG-14 et unicité des identifiants, contrôlées avant toute écriture."""
+        """Règles RG-10, RG-12 à RG-14 et unicité des identifiants, contrôlées avant toute écriture."""
+        if not self.tables:
+            raise ValueError("Le diagramme ne contient aucune table : rien à importer.")
         ids_tables, ids_colonnes, ids_index, ids_relations = set(), set(), set(), set()
+        noms_tables = set()
         for table in self.tables:
             _unique(ids_tables, table.id, "table")
+            nom_complet = (table.schema_sql or "", table.name)
+            if nom_complet in noms_tables:  # RG-10
+                raise ValueError(f"Deux tables portent le même nom : {table.name!r} (RG-10).")
+            noms_tables.add(nom_complet)
             noms_colonnes = set()
             for champ in table.fields:
                 _unique(ids_colonnes, champ.id, "colonne")
