@@ -10,7 +10,7 @@ from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy import bindparam, text
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -163,8 +163,10 @@ def importer_diagramme(db: Session, id_projet: UUID, id_utilisateur: UUID, reque
              "u": id_utilisateur, "p": id_projet},
         )
         db.commit()
-    except IntegrityError as erreur:
+    except (IntegrityError, DataError) as erreur:
         db.rollback()
+        if isinstance(erreur, DataError):  # valeur refusée par PostgreSQL, par exemple un caractère NUL
+            raise HTTPException(status_code=422, detail="Diagramme refusé : une valeur n'est pas acceptée par la base (caractère NUL, par exemple).")
         contrainte = getattr(getattr(erreur.orig, "diag", None), "constraint_name", None)
         raise HTTPException(
             status_code=422,
