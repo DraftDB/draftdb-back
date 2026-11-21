@@ -1,14 +1,13 @@
-"""
-Configuration de l'API, qui va être créer à partir des variables d'environnement
-qui sont dans le fichier .env.
-"""
+"""Configuration de l'API, lue depuis les variables d'environnement et le fichier .env."""
 
 from functools import lru_cache
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
-# Le reverse proxy dans lequel on avait décrit dans nos documents que c'était accessible à partir de cela
+# Le reverse proxy transmet /api/ au serveur (dossier de conception, figure 1).
 API_PREFIX = "/api"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -18,6 +17,9 @@ class Settings(BaseSettings):
     postgres_db: str
     postgres_host: str = "localhost"
     postgres_port: int = 5433
+
+    # Taille maximale du dump déclarée par le navigateur (cahier des charges, CU 1.5 : « à fixer »).
+    import_taille_max_octets: int = 50 * 1024 * 1024
 
     @property
     def database_url(self) -> URL:
@@ -29,6 +31,7 @@ class Settings(BaseSettings):
             port=self.postgres_port,
             database=self.postgres_db,
         )
+
 
 @lru_cache
 def get_settings() -> Settings:
