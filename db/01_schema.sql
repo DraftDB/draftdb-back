@@ -255,7 +255,7 @@ CREATE TABLE import_dump (
     rapport              JSONB         NOT NULL,              -- éléments créés et instructions non reprises
     id_projet            UUID          NOT NULL REFERENCES projet (id_projet),
     id_auteur            UUID          NOT NULL REFERENCES utilisateur (id_utilisateur),
-    id_version_produite  UUID          NOT NULL REFERENCES version (id_version),
+    id_version_produite  UUID          REFERENCES version (id_version),  -- vide : l'import ne crée pas de version (CU 1.5, RG-17)
     CONSTRAINT uq_import_version   UNIQUE (id_version_produite),
     CONSTRAINT ck_import_dialecte  CHECK (dialecte IN ('mysql', 'postgresql')),
     CONSTRAINT ck_import_taille    CHECK (taille_octets >= 0),

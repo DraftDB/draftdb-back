@@ -139,26 +139,23 @@ def importer_diagramme(db: Session, id_projet: UUID, id_utilisateur: UUID, reque
                     VALUES (:seq, 'projet', 'import', :resume, :p, :u)""").bindparams(bindparam("resume", type_=JSONB)),
             {"seq": numero_sequence, "resume": resume, "p": id_projet, "u": id_utilisateur},
         )
-        id_version = db.execute(
-            text("""INSERT INTO version (nature, numero_sequence, instantane, id_projet, id_auteur)
-                    VALUES ('AUTOMATIQUE', :seq, :instantane, :p, :u) RETURNING id_version""")
-            .bindparams(bindparam("instantane", type_=JSONB)),
-            {"seq": numero_sequence, "instantane": diagramme.model_dump(by_alias=True, exclude_unset=True, mode="json"),
-             "p": id_projet, "u": id_utilisateur},
-        ).scalar_one()
+        # L'import ne crée pas de version (dossier, § 4.2.5 et 4.2.9, RG-17) : si le responsable veut figer
+        # l'état importé, il crée lui-même une version nommée (CU 3.1). id_version_produite reste donc vide.
         # Le rapport est complété par le serveur (P2) : il compte lui-même les éléments créés.
         rapport = {"elements_crees": resume, "non_repris": [i.model_dump() for i in requete.rapport.non_repris]}
         id_import = db.execute(
-            text("""INSERT INTO import_dump (nom_fichier, dialecte, taille_octets, nb_elements_crees, rapport, id_projet, id_auteur, id_version_produite)
-                    VALUES (:nom, :dialecte, :taille, :nb, :rapport, :p, :u, :v) RETURNING id_import""")
+            text(
+                """INSERT INTO import_dump (nom_fichier, dialecte, taille_octets, nb_elements_crees, rapport, id_projet,
+                                            id_auteur)
+                    VALUES (:nom, :dialecte, :taille, :nb, :rapport, :p, :u) RETURNING id_import""")
             .bindparams(bindparam("rapport", type_=JSONB)),
             {"nom": requete.fichier.nom, "dialecte": requete.fichier.dialecte, "taille": requete.fichier.taille_octets,
-             "nb": lignes.nb_elements, "rapport": rapport, "p": id_projet, "u": id_utilisateur, "v": id_version},
+             "nb": lignes.nb_elements, "rapport": rapport, "p": id_projet, "u": id_utilisateur},
         ).scalar_one()
         db.execute(
             text("""INSERT INTO evenement_journal (nature, details, id_utilisateur, id_projet)
                     VALUES ('IMPORT', :details, :u, :p)""").bindparams(bindparam("details", type_=JSONB)),
-            {"details": {"id_import": str(id_import), "id_version": str(id_version),
+            {"details": {"id_import": str(id_import),
                          "nb_elements_crees": lignes.nb_elements, "remplacement": nb_tables_existantes > 0},
              "u": id_utilisateur, "p": id_projet},
         )
@@ -173,5 +170,4 @@ def importer_diagramme(db: Session, id_projet: UUID, id_utilisateur: UUID, reque
             detail=f"Diagramme refusé : identifiant déjà utilisé ou contrainte du schéma violée ({contrainte}).",
         )
 
-    return ImportResponse(id_import=id_import, id_version=id_version,
-                          numero_sequence=numero_sequence, nb_elements_crees=lignes.nb_elements)
+    return ImportResponse(id_import=id_import, numero_sequence=numero_sequence, nb_elements_crees=lignes.nb_elements)

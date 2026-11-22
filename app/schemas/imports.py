@@ -37,6 +37,5 @@ class ImportRequest(BaseModel):
 
 class ImportResponse(BaseModel):
     id_import: UUID
-    id_version: UUID
     numero_sequence: int
     nb_elements_crees: int
