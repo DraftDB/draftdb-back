@@ -1,13 +1,13 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Path
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.schemas.tables import TableAjout, TableAjoutee
+from app.schemas.tables import TableAjout, TableAjoutee, TableSupprimee
 from app.security import get_current_user
 from app.services.acces import charger_projet, exiger_concepteur
-from app.services.tables import ajouter_table
+from app.services.tables import ajouter_table, supprimer_table
 
 router = APIRouter(tags=["Tables"])
 
@@ -49,5 +49,30 @@ def ajouter(
 ):
     """Ajoute la table, ses colonnes et ses index. Une table sans clé primaire est acceptée, avec un avertissement."""
     resultat = ajouter_table(db, projet, id_utilisateur, table)
+    db.commit()
+    return resultat
+
+@router.delete(
+    "/projets/{id_projet}/tables/{id_table}",
+    response_model=TableSupprimee,
+    summary="Supprimer une table du schéma du projet (CU 2.3)",
+    responses={
+        401: {"description": "Utilisateur non identifié"},
+        403: {"description": "N'est pas concepteur du projet"},
+        404: {"description": "Projet ou table introuvable"},
+        409: {"description": "Confirmation requise : rien n'est supprimé. detail = "
+                             "{code: CONFIRMATION_REQUISE, cles_etrangeres: [...], index: [...]}"},
+        422: {"description": "Identifiant de table ou paramètre invalide"},
+    },
+)
+def supprimer(
+    id_table: str = Path(min_length=1, max_length=25, description="Identifiant ChartDB de la table"),
+    confirme_suppression: bool = False,
+    db: Session = Depends(get_db),
+    id_utilisateur: UUID = Depends(get_current_user),
+    projet=Depends(projet_modifiable),
+):
+    """Sans confirmation : liste les liens de la table (409), rien n'est supprimé. Avec confirmation : suppression logique."""
+    resultat = supprimer_table(db, projet, id_utilisateur, id_table, confirme_suppression)
     db.commit()
     return resultat
