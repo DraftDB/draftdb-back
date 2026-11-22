@@ -32,3 +32,18 @@ def exiger_responsable(db: Session, projet, id_utilisateur: UUID) -> None:
     """403 si l'utilisateur n'est pas le responsable du projet."""
     if projet["id_responsable"] != id_utilisateur:
         raise HTTPException(status_code=403, detail="Seul le responsable du projet peut effectuer cette action.")
+
+
+
+def exiger_concepteur(db: Session, projet, id_utilisateur: UUID) -> None:
+    """403 si l'utilisateur n'a pas le rôle de concepteur du projet (RG-06, matrice des droits § 2.5, EX-08).
+
+    Le rôle se lit dans participation : qui ne participe pas au projet n'est pas concepteur.
+    Le responsable n'est concepteur que s'il a ce rôle, que le CU 1.1 lui donne à la création.
+    """
+    est_concepteur = db.execute(
+        text("SELECT est_concepteur FROM participation WHERE id_utilisateur = :u AND id_projet = :p"),
+        {"u": id_utilisateur, "p": projet["id_projet"]},
+    ).scalar()
+    if not est_concepteur:
+        raise HTTPException(status_code=403, detail="Seul un concepteur du projet peut modifier le schéma.")

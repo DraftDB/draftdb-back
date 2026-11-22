@@ -1,7 +1,7 @@
 from fastapi import APIRouter, FastAPI
 
 from app.config import API_PREFIX
-from app.routers import health, imports, ouverture, projets
+from app.routers import health, imports, ouverture, projets, tables
 
 
 def create_app() -> FastAPI:
@@ -21,6 +21,7 @@ def create_app() -> FastAPI:
     api.include_router(imports.router)
     api.include_router(ouverture.router)
     api.include_router(projets.router)
+    api.include_router(tables.router)
     app.include_router(api)
     return app
 
