@@ -23,6 +23,7 @@ def test_import_complet(client_db, db_session, monde):
     assert reponse.status_code == 201
     corps = reponse.json()
     assert corps["numero_sequence"] == 1 and corps["nb_elements_crees"] == 8
+    assert set(corps) == {"id_import", "numero_sequence", "nb_elements_crees"}  # contrat du § 5.1.4 : pas d'id_version
 
     p = {"id_projet": monde["projet"]}
     assert _compter(db_session, "element_schema", nature="TABLE", **p) == 2
@@ -33,13 +34,15 @@ def test_import_complet(client_db, db_session, monde):
     assert relations == 1
     assert _compter(db_session, "operation", **p) == 1
     assert _compter(db_session, "evenement_journal", nature="IMPORT", **p) == 1
+    assert _compter(db_session, "version", **p) == 0
+    details = db_session.execute(text("SELECT details FROM evenement_journal WHERE nature = 'IMPORT' AND id_projet = :p"), {"p": monde["projet"]}).scalar_one()
+    assert set(details) == {"id_import", "nb_elements_crees", "remplacement"}
     projet = db_session.execute(text("SELECT * FROM projet WHERE id_projet = :p"), {"p": monde["projet"]}).mappings().one()
     assert projet["type_base"] == "postgresql" and projet["numero_sequence"] == 1
     assert projet["annexes"]["areas"][0]["name"] == "Zone clients"
-    version = db_session.execute(text("SELECT * FROM version WHERE id_projet = :p"), {"p": monde["projet"]}).mappings().one()
-    assert version["nature"] == "AUTOMATIQUE" and version["instantane"]["tables"][0]["name"] == "client"
     dump = db_session.execute(text("SELECT * FROM import_dump WHERE id_projet = :p"), {"p": monde["projet"]}).mappings().one()
     assert dump["nb_elements_crees"] == 8
+    assert dump["id_version_produite"] is None  # l'import ne crée pas de version (CU 1.5, RG-17)
     assert dump["rapport"]["elements_crees"]["tables"] == 2
     assert dump["rapport"]["non_repris"][0]["type"] == "INSERT"
 
@@ -67,7 +70,10 @@ def test_remplacement_apres_confirmation(client_db, db_session, monde):
     assert actives == [i("t_autre")]
     # rien n'est effacé : l'ancien état reste, supprimé logiquement
     assert _compter(db_session, "element_schema", id_projet=monde["projet"]) == 6 + 2
-    assert _compter(db_session, "version", id_projet=monde["projet"]) == 2
+    # l'import ne crée jamais de version : c'est l'utilisateur qui en crée une, nommée (CU 3.1)
+    assert _compter(db_session, "version", id_projet=monde["projet"]) == 0
+    imports = db_session.execute(text("SELECT id_version_produite FROM import_dump WHERE id_projet = :p"), {"p": monde["projet"]}).scalars().all()
+    assert imports == [None, None]  # deux imports sans version : la contrainte d'unicité accepte les valeurs vides
 
 
 def test_refus_si_non_responsable(client_db, monde):
