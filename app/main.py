@@ -1,7 +1,7 @@
 from fastapi import APIRouter, FastAPI
 
 from app.config import API_PREFIX
-from app.routers import health
+from app.routers import health, imports, ouverture
 
 
 def create_app() -> FastAPI:
@@ -18,6 +18,8 @@ def create_app() -> FastAPI:
     # C'est aussi ici que se branchera l'authentification (dependencies=[...]).
     api = APIRouter(prefix=API_PREFIX)
     api.include_router(health.router)
+    api.include_router(imports.router)
+    api.include_router(ouverture.router)
     app.include_router(api)
     return app
 
