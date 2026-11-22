@@ -57,3 +57,11 @@ class TableAjoutee(BaseModel):
     table: dict  # objet DBTable de ChartDB tel qu'il est enregistré (P1)
     numero_sequence: int
     avertissement: Avertissement | None  # toujours présent dans la réponse : le client lit la même structure
+
+
+
+class TableSupprimee(BaseModel):
+    """Réponse de DELETE /api/projets/{id_projet}/tables/{id_table} quand la suppression est faite (CU 2.3)."""
+
+    id_table: str
+    numero_sequence: int
