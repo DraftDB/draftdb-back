@@ -14,11 +14,16 @@
 5. **Le dossier de conception fait foi.** Si une demande le contredit, me le signaler au lieu de trancher.
    Quand le dossier est silencieux, proposer un choix et l'indiquer dans la PR (section « Points à valider »).
 6. **Avant de coder, lire la section du dossier qui décrit le cas d'utilisation** (chapitre 4) et le contrat
-   de la route (§ 5.1).
+   de la route (§ 5.1), puis `docs/CONTRAT_API.md` et `docs/ARCHITECTURE.md`.
 7. **Toute fonctionnalité est testée** et les tests passent (`python -m pytest`) avant de proposer une PR.
 8. **Confirmer avant toute action difficile à annuler** (supprimer des données, `docker compose down -v`,
-   réécrire l'historique Git).
+   réécrire l'historique Git, merger une PR).
 9. **Ne jamais inventer** : si une information manque (ticket Jira vide, règle absente du dossier), le dire.
+10. **Tenir la documentation à jour avec le code.** Toute PR qui ajoute ou change une route met à jour
+    `docs/CONTRAT_API.md` et `docs/API.md` ; toute PR qui change l'organisation du code ou le schéma met à jour
+    `docs/ARCHITECTURE.md`, `README.md` et ce fichier.
+11. **Respecter la licence AGPL-3.0** : ne jamais copier de code d'un projet sous une licence incompatible, et ne
+    jamais retirer les mentions de droits d'auteur ni le fichier `LICENSE`.
 
 ## Le projet
 
@@ -28,12 +33,23 @@ en atelier, le versionnent, le font approuver par un relecteur, puis en tirent l
 et de migration pour **MySQL et PostgreSQL**. Elle ne se connecte jamais aux bases du client : elle produit
 des fichiers `.sql`.
 
-- Le **front** est l'éditeur open source **ChartDB** adapté (TypeScript, React 18, React Flow, Yjs), dans un
-  **dépôt séparé**. **Ce dépôt ne contient que le serveur (back-end).**
+- Le **front** est l'éditeur open source **ChartDB** (AGPL-3.0) adapté (TypeScript, React 18, React Flow, Yjs),
+  dans un **dépôt séparé**. **Ce dépôt ne contient que le serveur (back-end).**
 - Profils : utilisateur, participant, **responsable** de projet (unique, transmissible), **concepteur** (modifie
   le schéma), **relecteur** (approuve ou refuse une version). Les rôles se cumulent, projet par projet.
 - Processus : P0 accéder à l'application, P1 mettre en place un projet, P2 concevoir le schéma en atelier,
   P3 valider et livrer une évolution.
+
+## Documentation du dépôt
+
+| Fichier | Contenu |
+|---|---|
+| `README.md` | Présentation, installation (Windows compris), lancement, configuration, tests, dépannage, licence |
+| `docs/ARCHITECTURE.md` | Organisation du code, couches, transactions, droits, base de données, flux, tests, limites |
+| `docs/CONTRAT_API.md` | Contrat de chaque route : entrées, sorties, erreurs, exemples réels |
+| `docs/API.md` | Vue d'ensemble : routes, droits, exigences du client, ce qui reste à faire |
+| `docs/*.pdf` | Cahier des charges, étude de faisabilité, dossier de conception, soutenance |
+| `LICENSE` | GNU AGPL-3.0 |
 
 ## Stack
 
@@ -61,7 +77,7 @@ db/
   01_schema.sql      schéma de la base, SOURCE DE VÉRITÉ (traduction du MLD)
   02_seed.sql        données de test, développement uniquement
 tests/               tests unitaires (sans base) et d'intégration (avec base)
-docs/                cahier des charges, étude de faisabilité, dossier de conception
+docs/                documentation (Markdown) et documents de référence (PDF)
 ```
 
 Pour ajouter une fonctionnalité : un fichier dans `app/routers/` (+ `app/services/` et `app/schemas/`),
@@ -70,11 +86,11 @@ puis l'inclure dans `app/main.py`.
 ## Lancer le projet
 
 ```bash
-cp .env.example .env                       # une seule fois
+cp .env.example .env                       # une seule fois (PowerShell : Copy-Item)
 docker compose up -d                       # PostgreSQL 16 (schéma + seed au 1er démarrage du volume)
-python -m venv .venv && source .venv/bin/activate     # Windows : .venv\Scripts\activate
-pip install -r requirements-dev.txt
-uvicorn app.main:app --reload              # http://127.0.0.1:8000/api/docs
+python -m venv .venv && source .venv/bin/activate     # Windows : .venv\Scripts\Activate.ps1
+python -m pip install -r requirements-dev.txt
+python -m uvicorn app.main:app --reload    # http://127.0.0.1:8000/api/docs
 ```
 
 - Le schéma et le seed ne se jouent qu'au **premier démarrage du volume**. Pour les rejouer :
@@ -101,6 +117,8 @@ python -m pytest tests/test_x.py -v        # un fichier
 
 ## API : conventions
 
+(Le détail est dans `docs/CONTRAT_API.md`.)
+
 - Préfixe `/api`, JSON, documentation sur `/api/docs`. Les objets du schéma suivent le format **ChartDB** (P1).
 - **Identification provisoire** : en-tête `X-User-Id` (401 sinon). Elle sera remplacée par le login (CU 0.1 à 0.3)
   sans changer les routes.
@@ -109,9 +127,8 @@ python -m pytest tests/test_x.py -v        # un fichier
 - **Erreurs** : `{"detail": ...}`. Liste pour une validation du corps, texte ou objet pour une erreur métier.
   Confirmation requise : **409** `{"detail": {"code": "CONFIRMATION_REQUISE", ...}}`, rien n'est modifié.
 - Une valeur refusée par la base (caractère NUL) donne un **422** avec rollback, jamais un 500.
-- Routes (selon l'avancement des PR) : `GET /api/health`, `POST /api/projets`, `GET /api/projets/{id}`,
-  `POST /api/projets/{id}/import`, `POST /api/projets/{id}/tables`,
-  `DELETE /api/projets/{id}/tables/{id_table}`.
+- Routes : `GET /api/health`, `POST /api/projets`, `GET /api/projets/{id}`, `POST /api/projets/{id}/import`,
+  `POST /api/projets/{id}/tables`, `DELETE /api/projets/{id}/tables/{id_table}`.
 
 ## Base de données
 
@@ -126,6 +143,7 @@ python -m pytest tests/test_x.py -v        # un fichier
   relation dépend de sa table ou de sa colonne.
 - Les règles de gestion (RG-xx) sont portées par des `CHECK`, des `UNIQUE` et un index partiel ; les autres
   sont contrôlées par l'API.
+- **L'import ne crée pas de version** (dossier V1.2, § 4.2.5) : `import_dump.id_version_produite` reste vide.
 
 ## Principes de conception (dossier, § 1.6)
 
@@ -154,11 +172,16 @@ python -m pytest tests/test_x.py -v        # un fichier
 - Branches : `main` (versions taguées), `develop` (intégration), `feature/DRAFTDB-<n>-<sujet>`
   (`<n>` = ticket Jira de dev back, par exemple `feature/DRAFTDB-43-supprimer-table`).
 - Chaque message de commit commence par la clé Jira : `DRAFTDB-43 ajoute la route de suppression d'une table`.
-- Une PR par ticket, vers `develop`, relue par un **autre membre de l'équipe back**.
+- Une PR par ticket, vers `develop`, relue par un **autre membre de l'équipe back** (GitHub exige des
+  approbations avant le merge).
 - Description de PR : contexte et dépendances, ce que ça fait, fichiers, **points à valider**, tests
   (nombre et résultat), comment tester dans Swagger.
 - PR empilées : indiquer la dépendance en tête de description et viser la branche parente tant qu'elle n'est
-  pas mergée ; la base repasse à `develop` ensuite.
+  pas mergée. **Quand la PR parente est mergée, changer la base de la suivante vers `develop` avant de la
+  merger** (sinon son code reste dans la branche parente et n'arrive jamais dans `develop`). Merger avec
+  « Create a merge commit », en cochant « Delete branch ».
+- Un push sur une branche de PR écarte les approbations déjà données : mettre la branche à jour **avant** de
+  demander les relectures.
 - Aucun CI pour l'instant : lancer `python -m pytest` avant chaque PR.
 
 ## Périmètre et interdits
@@ -169,7 +192,7 @@ python -m pytest tests/test_x.py -v        # un fichier
 - Ne jamais stocker le contenu d'un dump (RG-24) : seulement ses caractéristiques et le rapport.
 - Ne jamais mettre de secret dans le dépôt.
 
-## Documents de référence (`docs/`)
+## Documents de référence
 
 Cahier des charges (le « quoi », EX-01 à EX-17), étude de faisabilité, **dossier d'architecture et de
 conception** (le « comment » : modèles, cas d'utilisation, contrats de l'API). La version à jour est la **V1.2**
@@ -179,4 +202,4 @@ conception** (le « comment » : modèles, cas d'utilisation, contrats de l'API)
 
 Méthode Scrum, 4 sprints : S1 du 04/11 au 26/11/2026 (revue le 26/11), S2 jusqu'au 10/12, S3 jusqu'au 06/01
 (comité de pilotage le 16/12, version V1), S4 du 07/01 au 15/01/2027 (recette). Le suivi des tickets est dans
-Jira ; **l'état d'avancement se lit dans Jira et dans les PR ouvertes**, pas dans ce fichier.
+Jira ; **l'état d'avancement se lit dans Jira, dans les PR ouvertes et dans `docs/API.md`**, pas ici.
