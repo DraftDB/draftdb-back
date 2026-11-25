@@ -38,6 +38,7 @@ def test_ajout_nominal(client_db, monde, db_session):
     assert r.status_code == 201
     c = r.json()
     assert c["numero_sequence"] == 1 and c["avertissement"] is None
+    assert c["avertissements"] == [] and c["restauree"] is False
     assert c["table"]["id"] == i("t_client") and [f["id"] for f in c["table"]["fields"]] == [i("c_id"), i("c_nom")]
     assert c["table"]["x"] == 10 and "schema" not in c["table"]  # pas de null dans la réponse
 
@@ -180,11 +181,163 @@ def test_422_identifiant_deja_utilise_P3(client_db, monde, db_session, id_table,
     assert _un(db_session, "SELECT numero_sequence FROM projet WHERE id_projet = :p", p=monde["projet"]) == 1
 
 
-def test_identifiant_d_un_element_supprime_logiquement_reste_pris(client_db, monde, db_session):
+# --- Restauration d'une table supprimée (RG-09 précisée, AUD-06) -------------------------------------------
+
+def _supprimer(client, monde, id_table, projet=None):
+    r = client.delete(f"/api/projets/{projet or monde['projet']}/tables/{id_table}",
+                      params={"confirme_suppression": True}, headers=en_tete(monde["responsable"]))
+    assert r.status_code == 200, r.text
+    return r
+
+
+def _ouvrir(client, monde):
+    return client.get(f"/api/projets/{monde['projet']}", headers=en_tete(monde["responsable"])).json()["diagramme"]
+
+
+def test_restauration_d_une_table_supprimee_meme_identifiant(client_db, monde, db_session):
+    """Annuler une suppression : la même table (mêmes identifiants) est de nouveau acceptée."""
     _ajouter(client_db, monde, table_exemple())
-    db_session.execute(text("UPDATE element_schema SET date_suppression = now() WHERE id_projet = :p"), {"p": monde["projet"]})
-    r = _ajouter(client_db, monde, {"id": i("t_client"), "name": "renomme"})
+    _supprimer(client_db, monde, i("t_client"))
+
+    r = _ajouter(client_db, monde, table_exemple())
+
+    assert r.status_code == 201, r.text
+    assert r.json()["restauree"] is True and r.json()["numero_sequence"] == 3
+    t = _ouvrir(client_db, monde)["tables"][0]
+    assert t["id"] == i("t_client") and [f["id"] for f in t["fields"]] == [i("c_id"), i("c_nom")]
+    assert [x["id"] for x in t["indexes"]] == [i("i_pk")] and t["indexes"][0]["fieldIds"] == [i("c_id")]
+    assert _un(db_session, "SELECT count(*) FROM element_schema WHERE id_projet = :p AND date_suppression IS NULL",
+               p=monde["projet"]) == 3
+    actions = db_session.execute(text("SELECT action FROM operation WHERE id_projet = :p ORDER BY numero_sequence"),
+                                 {"p": monde["projet"]}).scalars().all()
+    assert actions == ["ajout", "suppression", "ajout"]  # l'historique garde les trois étapes (P4)
+
+
+def test_restauration_le_corps_recu_devient_l_etat_de_la_table(client_db, monde, db_session):
+    """Nom, colonnes et index du corps remplacent l'ancien état ; une ancienne colonne absente reste supprimée."""
+    _ajouter(client_db, monde, table_exemple())
+    _supprimer(client_db, monde, i("t_client"))
+    corps = table_exemple(name="clients", indexes=[])
+    corps["fields"] = [corps["fields"][0], {"id": i("c_neuve"), "name": "email", "type": {"id": "varchar"}}]
+
+    r = _ajouter(client_db, monde, corps)
+
+    assert r.status_code == 201 and r.json()["restauree"] is True
+    t = _ouvrir(client_db, monde)["tables"][0]
+    assert t["name"] == "clients" and [f["id"] for f in t["fields"]] == [i("c_id"), i("c_neuve")] and t["indexes"] == []
+    assert _un(db_session, "SELECT count(*) FROM index_schema WHERE id_index = :i", i=i("i_pk")) == 0
+    assert _un(db_session, "SELECT date_suppression IS NOT NULL FROM element_schema WHERE id_element = :i", i=i("c_nom"))
+
+
+def test_restauration_retrouve_les_relations_de_la_table(client_db, monde, db_session):
+    _ajouter(client_db, monde, table_exemple())
+    commande = {"id": i("t_cmd"), "name": "commande", "fields": [
+        {"id": i("c_cmd_id"), "name": "id", "type": {"id": "int"}, "primaryKey": True, "nullable": False},
+        {"id": i("c_cmd_client"), "name": "client_id", "type": {"id": "int"}}]}
+    _ajouter(client_db, monde, commande)
+    db_session.execute(text("""INSERT INTO relation (id_relation, nom, cardinalite_source, cardinalite_cible,
+                                                     id_colonne_source, id_colonne_cible)
+                               VALUES (:r, 'fk', 'many', 'one', :s, :c)"""),
+                       {"r": i("r_fk"), "s": i("c_cmd_client"), "c": i("c_id")})
+    _supprimer(client_db, monde, i("t_client"))
+    assert _ouvrir(client_db, monde)["relationships"] == []
+
+    assert _ajouter(client_db, monde, table_exemple()).status_code == 201
+
+    assert [r["id"] for r in _ouvrir(client_db, monde)["relationships"]] == [i("r_fk")]
+
+
+def test_identifiant_d_une_table_supprimee_d_un_autre_projet_refuse(client_db, monde, db_session):
+    autre = uuid4()
+    db_session.execute(text("INSERT INTO projet (id_projet, nom, id_responsable) VALUES (:p, 'Autre', :r)"), {"p": autre, "r": monde["responsable"]})
+    db_session.execute(text("INSERT INTO participation (id_utilisateur, id_projet, est_concepteur) VALUES (:r, :p, true)"), {"p": autre, "r": monde["responsable"]})
+    assert _ajouter(client_db, monde, table_exemple(), projet=autre).status_code == 201
+    _supprimer(client_db, monde, i("t_client"), projet=autre)
+
+    r = _ajouter(client_db, monde, table_exemple())
+
     assert r.status_code == 422 and "P3" in r.json()["detail"]
+
+
+def test_restauration_refuse_la_colonne_d_une_autre_table(client_db, monde):
+    _ajouter(client_db, monde, table_exemple())
+    _ajouter(client_db, monde, {"id": i("t_autre"), "name": "autre",
+                                "fields": [{"id": i("c_autre"), "name": "a", "type": {"id": "int"}}]})
+    _supprimer(client_db, monde, i("t_client"))
+    corps = table_exemple()
+    corps["fields"].append({"id": i("c_autre"), "name": "volee", "type": {"id": "int"}})
+
+    r = _ajouter(client_db, monde, corps)
+
+    assert r.status_code == 422 and i("c_autre") in r.json()["detail"]
+
+
+def test_restauration_refusee_si_le_nom_a_ete_repris(client_db, monde):
+    _ajouter(client_db, monde, table_exemple())
+    _supprimer(client_db, monde, i("t_client"))
+    _ajouter(client_db, monde, {"id": i("t_nouvelle"), "name": "client"})
+
+    r = _ajouter(client_db, monde, table_exemple())
+
+    assert r.status_code == 422 and "RG-10" in r.json()["detail"]
+
+
+# --- Noms (RG-10 précisée, AUD-02) -------------------------------------------------------------------------
+
+def test_422_nom_deja_pris_sans_tenir_compte_de_la_casse(client_db, monde):
+    assert _ajouter(client_db, monde, table_exemple(name="Client")).status_code == 201
+    r = _ajouter(client_db, monde, {"id": i("t_2"), "name": "CLIENT"})
+    assert r.status_code == 422 and "casse" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("nom", ['a"; DROP TABLE x;--', "a`b", "tab\tulation", " client", "client ", "é" * 32])
+def test_422_nom_inutilisable_en_sql(client_db, monde, db_session, nom):
+    r = _ajouter(client_db, monde, {"id": i("t_nom"), "name": nom})
+    assert r.status_code == 422
+    assert _un(db_session, "SELECT count(*) FROM element_schema WHERE id_projet = :p", p=monde["projet"]) == 0
+
+
+def test_mot_reserve_et_nom_a_proteger_acceptes_avec_avertissement(client_db, monde):
+    corps = {"id": i("t_sel"), "name": "select", "fields": [
+        {"id": i("c_k"), "name": "id", "type": {"id": "int"}, "primaryKey": True, "nullable": False},
+        {"id": i("c_n"), "name": "Nom client", "type": {"id": "varchar"}}]}
+
+    r = _ajouter(client_db, monde, corps)
+
+    assert r.status_code == 201 and r.json()["avertissement"] is None  # la table a une clé primaire
+    codes = [(a["code"], a["id_element"]) for a in r.json()["avertissements"]]
+    assert codes == [("NOM_RESERVE", i("t_sel")), ("NOM_A_PROTEGER", i("c_n"))]
+
+
+# --- Types (RG-11 précisée, AUD-03) ------------------------------------------------------------------------
+
+def _table_type(type_id):
+    return {"id": i("t_typ"), "name": "typee", "fields": [{"id": i("c_typ"), "name": "f", "type": {"id": type_id}}]}
+
+
+@pytest.mark.parametrize("type_base, type_id, attendu", [
+    ("generic", "nimportequoi", 422),
+    ("generic", "tinyint", 422),        # propre à MySQL : pas dans un projet générique
+    ("generic", "INTEGER", 201),        # synonyme commun, casse ignorée
+    ("mysql", "tinyint", 201),
+    ("mysql", "jsonb", 422),            # propre à PostgreSQL
+    ("postgresql", "jsonb", 201),
+    ("postgresql", "character varying", 201),
+])
+def test_type_de_colonne_selon_le_dialecte_du_projet(client_db, monde, db_session, type_base, type_id, attendu):
+    db_session.execute(text("UPDATE projet SET type_base = :t WHERE id_projet = :p"), {"t": type_base, "p": monde["projet"]})
+
+    r = _ajouter(client_db, monde, _table_type(type_id))
+
+    assert r.status_code == attendu, r.text
+    if attendu == 422:
+        assert "RG-11" in r.json()["detail"]
+
+
+def test_type_personnalise_du_projet_admis(client_db, monde, db_session):
+    db_session.execute(text("""UPDATE projet SET annexes = '{"customTypes": [{"id": "ct1", "name": "humeur", "kind": "enum"}]}'
+                               WHERE id_projet = :p"""), {"p": monde["projet"]})
+    assert _ajouter(client_db, monde, _table_type("humeur")).status_code == 201
 
 
 @pytest.mark.parametrize("corps", [

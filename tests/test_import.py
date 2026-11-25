@@ -23,7 +23,8 @@ def test_import_complet(client_db, db_session, monde):
     assert reponse.status_code == 201
     corps = reponse.json()
     assert corps["numero_sequence"] == 1 and corps["nb_elements_crees"] == 8
-    assert set(corps) == {"id_import", "numero_sequence", "nb_elements_crees"}  # contrat du § 5.1.4 : pas d'id_version
+    assert set(corps) == {"id_import", "numero_sequence", "nb_elements_crees", "avertissements"}  # § 5.1.4 : pas d'id_version
+    assert corps["avertissements"] == []
 
     p = {"id_projet": monde["projet"]}
     assert _compter(db_session, "element_schema", nature="TABLE", **p) == 2
@@ -130,3 +131,25 @@ def test_le_rapport_ne_peut_pas_contenir_le_texte_d_une_instruction(client_db, m
     reponse = _importer(client_db, monde, rapport=rapport)
 
     assert reponse.status_code == 422
+
+def test_avertissements_sur_les_noms_et_les_types(client_db, db_session, monde):
+    """Un mot réservé ou un type inconnu du dialecte n'empêche pas l'import (EX-14) : il est signalé (EX-05)."""
+    d = diagramme_exemple()
+    d["tables"][0]["name"] = "user"
+    d["tables"][0]["fields"][1]["type"] = {"id": "citext"}
+
+    reponse = _importer(client_db, monde, diagramme=d)
+
+    assert reponse.status_code == 201, reponse.text
+    codes = [(a["code"], a["id_element"]) for a in reponse.json()["avertissements"]]
+    assert codes == [("NOM_RESERVE", i("t_client")), ("TYPE_INCONNU", i("c_client_nom"))]
+    rapport = db_session.execute(text("SELECT rapport FROM import_dump WHERE id_projet = :p"), {"p": monde["projet"]}).scalar_one()
+    assert [a["code"] for a in rapport["avertissements"]] == ["NOM_RESERVE", "TYPE_INCONNU"]
+
+
+def test_deux_tables_de_meme_nom_a_la_casse_pres_refusees(client_db, db_session, monde):
+    d = diagramme_exemple()
+    d["tables"][1]["name"] = "Client"
+
+    assert _importer(client_db, monde, diagramme=d).status_code == 422
+    assert _compter(db_session, "import_dump", id_projet=monde["projet"]) == 0

@@ -124,13 +124,14 @@ def test_la_table_et_ses_liens_disparaissent_du_schema(client_db, monde, db_sess
     assert d["numero_sequence"] == 3
 
 
-def test_le_nom_redevient_libre_mais_pas_l_identifiant(client_db, monde):
+def test_le_nom_redevient_libre_et_l_identifiant_peut_etre_restaure(client_db, monde):
     _ajouter(client_db, monde, table_client())
     _supprimer(client_db, monde, i("t_client"), confirme=True)
     nouvelle = {"id": i("t_neuve"), "name": "client"}                               # RG-10 : nom libre
     assert client_db.post(f"/api/projets/{monde['projet']}/tables", json=nouvelle, headers=en_tete(monde["responsable"])).status_code == 201
-    reprise = {"id": i("t_client"), "name": "autre"}                                 # P3 : id toujours pris
-    assert client_db.post(f"/api/projets/{monde['projet']}/tables", json=reprise, headers=en_tete(monde["responsable"])).status_code == 422
+    reprise = {"id": i("t_client"), "name": "autre"}                                 # RG-09 précisée : restauration
+    r = client_db.post(f"/api/projets/{monde['projet']}/tables", json=reprise, headers=en_tete(monde["responsable"]))
+    assert r.status_code == 201 and r.json()["restauree"] is True
 
 
 def test_supprimer_deux_fois_donne_404(client_db, monde):
