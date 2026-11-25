@@ -50,13 +50,16 @@ app/
     projets.py           creer_projet
     importer.py          construire_lignes, annexes_depuis, importer_diagramme
     lecture.py           reconstituer_diagramme
-    tables.py            ajouter_table, supprimer_table (+ vérifications privées)
+    tables.py            ajouter_table (ajout ou restauration), supprimer_table (+ vérifications privées)
 
   schemas/               objets de transfert (DTO) Pydantic
     chartdb.py           objets du format ChartDB : DBTable, DBField, DBIndex, DBRelationship, Diagramme
     projets.py           ProjetOuvert, ProjetCreation, ProjetCree
     imports.py           ImportRequest, ImportResponse
-    tables.py            TableAjout, TableAjoutee, TableSupprimee, Avertissement
+    tables.py            TableAjout, TableAjoutee, TableSupprimee
+    regles.py            règles de nommage (RG-10), Avertissement, avertissements de nommage et de clé primaire
+    mots_reserves.py     mots réservés de MySQL 8.4 et de PostgreSQL 16 (avec leur source)
+    types_colonnes.py    types de colonnes admis selon le dialecte du projet (RG-11, listes de ChartDB v1.20.1)
 
 db/
   01_schema.sql          schéma de la base : SOURCE DE VÉRITÉ (traduction du MLD du dossier)
@@ -167,7 +170,7 @@ Pour respecter l'ordre, les routes `tables` utilisent une **dépendance** (`proj
 404  charger_projet            (dépendance projet_modifiable)
 403  exiger_concepteur         (dépendance projet_modifiable)
 422  validation du corps       (Pydantic, après les dépendances)
-422  règles lues en base       (service : nom libre RG-10, identifiants libres P3)
+422  règles lues en base       (service : nom libre RG-10, types admis RG-11, identifiants P3 / restauration RG-09)
 ```
 
 ---
@@ -187,7 +190,9 @@ Pour respecter l'ordre, les routes `tables` utilisent une **dépendance** (`proj
 ### Conventions
 
 - **Identifiants ChartDB** (tables, colonnes, index, relations) : `VARCHAR(25)`, fournis par le navigateur et
-  **jamais régénérés** (P3). Un identifiant déjà utilisé est refusé (422), y compris celui d'un élément supprimé.
+  **jamais régénérés** (P3). Ce sont des clés primaires **globales** : un identifiant déjà utilisé est refusé (422),
+  sauf celui d'une **table supprimée du même projet**, qui est alors **restaurée** avec ses colonnes et ses index
+  (RG-09 précisée : « annuler » une suppression). L'import, lui, exige des identifiants neufs.
 - **Autres identifiants** : UUID générés par la base (`gen_random_uuid()`). Dates : `TIMESTAMPTZ`.
 - **Suppression logique** (P4) : seule `element_schema` (donc tables et colonnes) porte `date_suppression`. Un index ou
   une relation disparaît du schéma courant avec sa table ou sa colonne. Aucune clé étrangère n'est en
@@ -201,7 +206,8 @@ Pour respecter l'ordre, les routes `tables` utilisent une **dépendance** (`proj
 `UNIQUE` sur `utilisateur.login` (RG-01), `CHECK` rôle d'un participant (RG-06), type de base (RG-11), clé primaire non
 nullable et rang ≥ 1 (RG-12), cardinalités (RG-13), un rang par colonne d'index (RG-14), numéro de séquence unique par
 projet (RG-16), règles des versions et décisions (RG-17 à RG-20), index partiel « une seule prise de main en cours »
-(RG-28). Les autres règles (RG-10, RG-13 sur la cible, P3…) sont contrôlées par l'API.
+(RG-28). Les autres règles (RG-10 et nommage, RG-11 pour les types de colonnes, RG-13 sur la cible, P3…) sont
+contrôlées par l'API.
 
 ### Correspondance ChartDB ↔ tables
 
@@ -222,16 +228,32 @@ Les objets échangés sont décrits par des DTO Pydantic dans `schemas/chartdb.p
 de ChartDB, via des alias (`primary_key` ↔ `primaryKey`). Les champs inconnus sont **conservés** (`extra="allow"`) :
 le serveur renvoie ce qu'il a reçu, sans rien perdre.
 
-Les validations se font avant toute écriture. Pour un diagramme complet (import) : au moins une table, identifiants
-uniques, nom de table libre (RG-10), clé primaire non nullable (RG-12), relations entre deux colonnes distinctes et
-présentes (RG-13), index sur des colonnes de leur table sans doublon (RG-14). Pour une seule table (ajout), la
-sous-classe `TableAjout` applique les règles internes à la table (`schemas/tables.py`).
+Les validations se font avant toute écriture, **dans les mêmes classes pour l'ajout et l'import** :
+
+- `Nom` (tous les noms) : règles de nommage de `schemas/regles.py` (vide, espaces en bordure, caractère de contrôle,
+  guillemet, plus de 63 octets : 422) ;
+- `DBTable` : règles internes à une table : identifiants uniques (la table et ses colonnes partagent une clé en base),
+  deux colonnes de même nom à la casse près (RG-10), clé primaire non nullable (RG-12), index sur des colonnes de leur
+  table sans doublon (RG-14). `TableAjout` (ajout) en hérite sans rien ajouter ;
+- `Diagramme` (import) : règles entre tables : au moins une table, identifiants uniques, deux tables de même nom à la
+  casse près dans un même schéma SQL (RG-10), relations entre deux colonnes distinctes et présentes (RG-13).
+
+Ce qui dépend de la base est contrôlé par le service : nom de table libre dans le projet (RG-10), type de colonne admis
+pour le dialecte du projet (RG-11), identifiants déjà utilisés ou à restaurer (P3, RG-09).
 
 Les tailles viennent du dictionnaire de données : nom ≤ 63 caractères, identifiant ≤ 25, type ≤ 30, etc. (liste
 complète dans [`CONTRAT_API.md`](CONTRAT_API.md#2-objets-échangés-format-chartdb)).
 
 **RG-10 et schéma SQL :** deux tables d'un même projet ne portent pas le même nom **au sein d'un même schéma SQL**
-(`schema` absent et vide sont équivalents). Deux tables de même nom dans des schémas différents sont acceptées.
+(`schema` absent et vide sont équivalents), **sans tenir compte de la casse** : `Client` et `client` sont la même table
+pour PostgreSQL (noms non protégés) et pour MySQL sous Windows et macOS. Deux tables de même nom dans des schémas
+différents sont acceptées.
+
+**Nommage et types (RG-10 et RG-11 précisées) :** un mot réservé de MySQL ou de PostgreSQL, ou un nom hors
+`[A-Za-z0-9_]`, est accepté avec un **avertissement** (il devra être protégé par des guillemets à l'export) : le refuser
+bloquerait l'import de dumps réels. Un type de colonne absent des listes de ChartDB pour le dialecte du projet est
+**refusé à l'ajout** (422) et **signalé à l'import** (avertissement `TYPE_INCONNU`). Détail dans
+[`CONTRAT_API.md`](CONTRAT_API.md).
 
 ---
 
@@ -268,11 +290,16 @@ sequenceDiagram
     R->>DB: dépendance : SELECT projet FOR UPDATE, rôle de concepteur (401, 404, 403)
     R->>R: validation Pydantic de la table (422)
     R->>S: ajouter_table(db, projet, utilisateur, table)
-    S->>DB: nom libre ? identifiants libres ? (422)
-    S->>DB: INSERT element_schema, table_schema, colonne, index_schema, colonne_index
+    S->>DB: nom libre (casse ignorée) ? type admis ? identifiants libres ou table à restaurer ? (422)
+    alt nouvelle table
+        S->>DB: INSERT element_schema, table_schema, colonne, index_schema, colonne_index
+    else identifiant d'une table supprimée du même projet (restauration)
+        S->>DB: UPDATE element_schema (date_suppression vidée), table_schema, colonnes reprises
+        S->>DB: INSERT colonnes nouvelles ; index du corps à la place des anciens
+    end
     S->>DB: UPDATE projet (numero_sequence + 1), INSERT operation (ajout)
     R->>DB: COMMIT
-    R-->>F: 201 {table, numero_sequence, avertissement}
+    R-->>F: 201 {table, numero_sequence, avertissement, avertissements, restauree}
 ```
 
 Aucun événement n'est écrit dans le journal d'activité pour un ajout : l'opération (`operation`) suffit.
@@ -354,7 +381,7 @@ Corps d'erreur : `{"detail": …}`.
 
 ## Tests
 
-139 tests (au 22/11/2026), en deux familles :
+182 tests (au 25/11/2026), en deux familles :
 
 - **Sans base** : validation des objets ChartDB (`tests/test_import_diagramme.py`, `tests/test_table_ajout.py`),
   traduction en lignes de tables, route de santé avec une session factice.
@@ -403,7 +430,7 @@ et concepteur, relecteur, étranger ; plus un projet), `en_tete(id)` (en-tête `
 |---|---|
 | **P1** Brancher plutôt que réécrire : format JSON de ChartDB | `schemas/chartdb.py`, `lecture.reconstituer_diagramme` |
 | **P2** Le serveur fait foi | `acces.py`, validations avant écriture, numéros de séquence calculés sous verrou |
-| **P3** Identifiants stables | Identifiant refusé s'il est déjà utilisé (`tables._verifier_identifiants_libres`) |
+| **P3** Identifiants stables | Identifiant refusé s'il est déjà utilisé, sauf restauration d'une table supprimée du même projet (`tables._restauration`, `tables._restaurer`) |
 | **P4** Rien ne s'efface | `date_suppression`, `operation` avec l'état avant et après |
 | **P5** Un schéma neutre | `projet.type_base = 'generic'` tant qu'aucun dump n'a été importé |
 | **P6** Aucune donnée chez un tiers | Le dump n'est jamais reçu ni conservé ; le rapport ne contient pas le texte des instructions |
