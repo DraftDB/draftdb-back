@@ -12,7 +12,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Créer la release GitHub
-        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+
+      - name: Créer la release GitHub (si elle n'existe pas déjà)
+        run: |
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            echo "La release $GITHUB_REF_NAME existe déjà : rien à faire."
+          else
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+          fi
         env:
           GH_TOKEN: ${{ github.token }}
