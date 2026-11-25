@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    branches: [develop, main]
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: draftdb
+          POSTGRES_PASSWORD: draftdb
+          POSTGRES_DB: draftdb
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U draftdb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      POSTGRES_USER: draftdb
+      POSTGRES_PASSWORD: draftdb
+      POSTGRES_DB: draftdb
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5433
+      PGPASSWORD: draftdb
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Installer les dépendances
+        run: pip install -r requirements-dev.txt
+
+      - name: Initialiser la base (schéma + seed)
+        run: |
+          for f in db/*.sql; do
+            psql -h localhost -p 5433 -U draftdb -d draftdb -v ON_ERROR_STOP=1 -f "$f"
+          done
+
+      - name: Lancer les tests
+        run: pytest -v -rs
