@@ -29,7 +29,9 @@ L'éditeur de schémas est **ChartDB** (projet open source, voir [Licence](#lice
 | [`CLAUDE.md`](CLAUDE.md) | Consignes de travail pour Claude Code (règles, conventions, commandes) |
 | [`db/01_schema.sql`](db/01_schema.sql) | Schéma de la base : **source de vérité** |
 | [`.env.example`](.env.example) | Variables de configuration |
-| [`docs/`](docs/) | Cahier des charges, étude de faisabilité, dossier de conception, présentation de soutenance (PDF) |
+| [`docs/`](docs/) | Cahier des charges, étude de faisabilité, dossier de conception (chapitres 1 à 3, V1.1), présentation de soutenance (PDF) |
+| [`docs/MODIFICATIONS_DOSSIER_V1.3.md`](docs/MODIFICATIONS_DOSSIER_V1.3.md) | Modifications prévues pour la V1.3 du dossier de conception |
+| [`.github/workflows/`](.github/workflows/) | Intégration continue (tests) et création des releases |
 
 ---
 
@@ -59,9 +61,9 @@ sans doute, mais elles n'ont pas été vérifiées.
 
 | Outil | Version | Où elle intervient |
 |---|---|---|
-| Docker Desktop | version récente, avec `docker compose` (v2) | PostgreSQL (rien d'autre à installer pour la base) |
+| Docker Desktop (Windows, macOS) ou Docker Engine (Linux) | version récente, avec `docker compose` (v2) | PostgreSQL (rien d'autre à installer pour la base) |
 | WSL 2 (Windows seulement) | avec une distribution Ubuntu | Moteur de Docker Desktop |
-| Python | **3.13** ou plus récent (testé en 3.13 et 3.14) | API |
+| Python | **3.13** ou plus récent (testé en 3.13 et 3.14 ; la CI utilise 3.14) | API |
 | PostgreSQL | **16** | Base de données (image `postgres:16`) |
 | FastAPI / Uvicorn | 0.162.7 / 0.54.0 | API et serveur |
 | SQLAlchemy / psycopg | 2.1.8 / 3.3.9 | Accès à la base (SQL direct) |
@@ -73,10 +75,11 @@ Les dépendances sont dans `requirements.txt` (exécution) et `requirements-dev.
 
 ---
 
-## Windows : installer Docker Desktop et WSL (une seule fois)
+## Windows : installer les outils (une seule fois)
 
 La base PostgreSQL tourne dans un conteneur **Linux**. Sous Windows, il faut donc **Docker Desktop**, qui s'appuie
-sur **WSL 2**. Sans eux, la commande `docker compose` n'existe pas ou ne trouve pas de moteur.
+sur **WSL 2**. Sans eux, la commande `docker compose` n'existe pas ou ne trouve pas de moteur. L'API demande
+**Python 3.13 ou plus récent**.
 
 1. **Vérifier la virtualisation** : Gestionnaire des tâches, onglet *Performances*, *UC* : « Virtualisation » doit
    indiquer « Activé ». Sinon, l'activer dans le BIOS (*Intel VT-x*, *SVM* ou *Virtualization Technology*).
@@ -86,24 +89,49 @@ sur **WSL 2**. Sans eux, la commande `docker compose` n'existe pas ou ne trouve 
 3. **Installer Docker Desktop** (https://www.docker.com/products/docker-desktop/) en laissant cochée l'option
    *Use WSL 2 instead of Hyper-V*, puis le **lancer** et attendre « Engine running ». Il doit rester ouvert tant qu'on
    utilise le projet.
-4. **Installer Git pour Windows** (https://git-scm.com/download/win).
+4. **Installer Python 3.13 ou plus récent** (https://www.python.org/downloads/). Avec l'installateur classique, cocher
+   **« Add python.exe to PATH »** sur le premier écran : sans cette case, la commande `python` n'est pas trouvée.
+   Si `python` ouvre le **Microsoft Store** au lieu de répondre, désactiver les raccourcis de Windows : *Paramètres*,
+   *Applications*, *Paramètres avancés des applications*, *Alias d'exécution d'application*, puis désactiver
+   `python.exe` et `python3.exe`.
+5. **Installer Git pour Windows** (https://git-scm.com/download/win).
 
 Vérifier dans un **nouveau** PowerShell :
 
 ```powershell
+python --version             # doit afficher 3.13 ou plus
+git --version
 docker --version
 docker compose version
 docker run --rm hello-world
 ```
 
-Le dernier message doit contenir « Hello from Docker! ».
+La dernière commande doit afficher « Hello from Docker! ».
+
+## Linux et macOS : installer les outils (une seule fois)
+
+- **Docker** :
+  - macOS : Docker Desktop (https://www.docker.com/products/docker-desktop/) ;
+  - Linux : Docker Engine et le plugin `docker compose` (https://docs.docker.com/engine/install/). Pour lancer `docker`
+    sans `sudo`, ajouter son utilisateur au groupe `docker` (`sudo usermod -aG docker $USER`), puis se déconnecter et
+    se reconnecter.
+- **Python 3.13 ou plus récent** : vérifier avec `python3 --version`.
+  - Ubuntu : `sudo apt install python3 python3-venv python3-pip`. **Ubuntu 24.04 fournit Python 3.12, trop ancien** :
+    installer `python3.13` et `python3.13-venv` (par exemple depuis le PPA *deadsnakes*), puis créer l'environnement avec
+    `python3.13 -m venv .venv`.
+  - macOS : l'installateur de https://www.python.org/downloads/ ou `brew install python@3.13`.
+- **Git** : `sudo apt install git` (Ubuntu) ; sur macOS, il est proposé au premier appel de `git`.
+
+Sous Linux et macOS, la commande s'appelle `python3` **tant que l'environnement virtuel n'est pas activé** ; une fois
+activé, `python` suffit.
 
 ---
 
 ## Démarrage rapide
 
-Commandes pour **PowerShell** ; sous Linux ou macOS, remplacer `Copy-Item` par `cp` et l'activation de
-l'environnement par `source .venv/bin/activate`.
+Docker Desktop doit être **lancé** (Windows, macOS) avant `docker compose`.
+
+**Windows (PowerShell)** :
 
 ```powershell
 git clone https://github.com/DraftDB/draftdb-back.git
@@ -118,6 +146,30 @@ python -m pip install -r requirements-dev.txt
 
 python -m uvicorn app.main:app --reload
 ```
+
+**Linux et macOS** :
+
+```bash
+git clone https://github.com/DraftDB/draftdb-back.git
+cd draftdb-back
+
+cp .env.example .env
+docker compose up -d
+
+python3 -m venv .venv                # ou python3.13 -m venv .venv (voir plus haut)
+source .venv/bin/activate
+python -m pip install -r requirements-dev.txt
+
+python -m uvicorn app.main:app --reload
+```
+
+Au **tout premier** `docker compose up -d`, PostgreSQL met quelques secondes à créer la base et à jouer les scripts de
+`db/`. Pendant ce temps, `/api/health` répond `503` avec `"database": "indisponible"` : attendre puis recharger. La base
+est prête quand `docker compose logs db` affiche « database system is ready to accept connections » après la ligne
+« PostgreSQL init process complete ».
+
+À chaque nouveau terminal, **réactiver l'environnement virtuel** avant de lancer l'API ou les tests
+(`.\.venv\Scripts\Activate.ps1` ou `source .venv/bin/activate`) : le début de la ligne de commande affiche alors `(.venv)`.
 
 | Adresse | Rôle |
 |---|---|
@@ -161,6 +213,17 @@ Les routes qui ne sont pas publiques demandent l'en-tête **`X-User-Id`** (ident
 > pour un projet `generic`).
 
 Chaque route, avec ses réponses d'erreur, est décrite dans [`docs/CONTRAT_API.md`](docs/CONTRAT_API.md).
+
+### Avec le front (ChartDB adapté)
+
+Le front est dans un **dépôt séparé** de l'organisation [DraftDB](https://github.com/DraftDB) ; son installation est
+décrite dans son propre README. Ce serveur doit tourner en même temps, sur http://127.0.0.1:8000, avec ses routes sous
+`/api`.
+
+> **Limite actuelle** : l'API ne configure pas encore de **CORS**. Si le front est servi depuis une autre adresse (un
+> autre port, par exemple un serveur de développement), le navigateur bloque ses appels à l'API (erreur « CORS » dans la
+> console). Dans le déploiement prévu (dossier de conception, figure 1), un reverse proxy transmet `/api/` au serveur :
+> si le front est servi par ce même proxy, il a la même adresse que l'API et le problème ne se pose pas.
 
 ---
 
@@ -215,6 +278,31 @@ La stratégie de test est détaillée dans [`docs/ARCHITECTURE.md`](docs/ARCHITE
 
 ---
 
+## Intégration continue et releases
+
+Deux workflows GitHub Actions sont dans [`.github/workflows/`](.github/workflows/) :
+
+| Workflow | Quand | Ce qu'il fait |
+|---|---|---|
+| `ci.yml` | À chaque push et pull request sur `develop` et `main` | Démarre un PostgreSQL 16, joue `db/01_schema.sql` et `db/02_seed.sql`, puis lance toute la suite `pytest` (tests d'intégration compris) avec Python 3.14 |
+| `release.yml` | À chaque tag `v*` poussé | Crée la release GitHub avec des notes générées à partir des PR, sauf si elle existe déjà |
+
+Le résultat s'affiche dans l'onglet **Actions** du dépôt et en bas de chaque pull request. Dans le journal du job
+`tests`, aucun test ne doit être « skipped » pour « Base PostgreSQL indisponible ».
+
+Publier une version (après le merge de `develop` dans `main`) :
+
+```powershell
+git checkout main
+git pull
+git tag -a v0.2.0 -m "v0.2.0 : Sprint 2"
+git push origin v0.2.0
+```
+
+Puis, dans l'onglet **Releases**, ouvrir la version et la modifier pour compléter les notes si besoin.
+
+---
+
 ## Commandes utiles
 
 | Besoin | Commande |
@@ -253,6 +341,29 @@ Les règles entre les couches sont dans [`docs/ARCHITECTURE.md`](docs/ARCHITECTU
 ---
 
 ## Dépannage
+
+**`python` n'est pas reconnu, ou ouvre le Microsoft Store** : Python n'est pas installé ou pas dans le `PATH`.
+Réinstaller en cochant « Add python.exe to PATH », et désactiver les alias `python.exe` et `python3.exe` (voir
+l'installation sous Windows). Sous Linux et macOS, utiliser `python3`.
+
+**`pip install` échoue, ou l'API ne démarre pas avec une erreur de syntaxe ou d'import** : vérifier la version de
+Python dans l'environnement activé avec `python --version` (3.13 au minimum). Si elle est trop ancienne, supprimer le
+dossier `.venv`, puis le recréer avec la bonne version.
+
+**`ModuleNotFoundError: No module named 'fastapi'`** (ou un autre module) : l'environnement virtuel n'est pas activé
+dans ce terminal, ou les dépendances n'y sont pas installées. Activer `.venv`, puis relancer
+`python -m pip install -r requirements-dev.txt`.
+
+**`/api/health` répond `503`** : la base n'est pas joignable. Au premier démarrage, attendre quelques secondes
+(voir le démarrage rapide) ; sinon vérifier `docker compose ps` et le fichier `.env`.
+
+**`500 Internal Server Error`, avec une `ValidationError` sur `postgres_user` (ou `postgres_password`, `postgres_db`)
+dans le terminal de l'API** : l'API démarre, mais la configuration n'est lue qu'au premier appel qui touche la base ;
+le fichier `.env` est absent. Lancer `Copy-Item .env.example .env` (ou `cp .env.example .env`) **à la racine du dépôt**, et lancer
+l'API depuis ce dossier.
+
+**Le port 8000 est déjà utilisé** : lancer l'API sur un autre port,
+`python -m uvicorn app.main:app --reload --port 8001`, et utiliser http://127.0.0.1:8001/api/docs.
 
 **`401` « en-tête X-User-Id manquant »** : l'en-tête est absent, ou placé dans le corps JSON au lieu des **en-têtes**.
 Dans un client REST, ouvrir la section *Headers* et y ajouter `X-User-Id`, avec `Content-Type: application/json`.
@@ -295,6 +406,7 @@ lancé, ou le terminal a été ouvert avant l'installation (en ouvrir un nouveau
   (GitHub exige des approbations avant le merge).
 - Avant une PR : `python -m pytest`, et mettre à jour la documentation (`docs/CONTRAT_API.md`, `docs/API.md`) si une
   route change.
+- Sur la PR, le job `tests` de l'intégration continue doit être **vert** avant le merge.
 
 Les conventions de code sont dans [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#conventions-de-code).
 
