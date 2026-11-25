@@ -149,11 +149,16 @@ Les routes qui ne sont pas publiques demandent l'en-tête **`X-User-Id`** (ident
 }
 ```
 
-4. **Execute** : réponse **201** avec la table, son numéro de séquence et un avertissement éventuel.
+4. **Execute** : réponse **201** avec la table, son numéro de séquence et ses avertissements éventuels (clé primaire
+   absente, mot réservé, nom à protéger par des guillemets).
 
-> Les identifiants ChartDB (`id` de la table, des colonnes, des index) ne peuvent servir **qu'une seule fois** dans toute
-> la base, même après une suppression. Pour rejouer l'exemple, changer les `id` (ou repartir d'une base neuve avec
-> `docker compose down -v`) : sinon la réponse est un **422** « Identifiant ChartDB déjà utilisé ».
+> Les identifiants ChartDB (`id` de la table, des colonnes, des index) sont uniques dans toute la base. Renvoyer une table
+> **supprimée** du même projet, avec les mêmes `id`, la **restaure** (`"restauree": true`). Sinon, pour rejouer l'exemple,
+> changer les `id` : un identifiant déjà utilisé donne un **422** « Identifiant ChartDB déjà utilisé ».
+>
+> Les noms et les types sont contrôlés : guillemet, espace en bordure ou deux tables `Client` et `client` donnent un
+> **422** ; le type d'une colonne doit être un type ChartDB admis pour le dialecte du projet (`int`, `varchar`, `uuid`…
+> pour un projet `generic`).
 
 Chaque route, avec ses réponses d'erreur, est décrite dans [`docs/CONTRAT_API.md`](docs/CONTRAT_API.md).
 

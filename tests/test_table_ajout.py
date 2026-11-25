@@ -9,7 +9,8 @@ from pydantic import ValidationError
 from app.schemas.chartdb import Diagramme
 from app.schemas.tables import TableAjout
 from app.services.importer import construire_lignes
-from app.services.tables import _avertissement
+from app.schemas.regles import avertissement_cle_primaire as _avertissement, avertissements_table
+from app.schemas.types_colonnes import types_admis
 
 
 def table_valide() -> dict:
@@ -53,12 +54,12 @@ def test_les_champs_inconnus_de_chartdb_sont_conserves():
     (lambda t: t.pop("id"), "id"),
     (lambda t: t.pop("name"), "name"),
     (lambda t: t.update(name=""), "at least 1"),
-    (lambda t: t.update(name="   "), "nom de la table est vide"),
+    (lambda t: t.update(name="   "), "nom ne peut pas être vide"),
     (lambda t: t.update(name="n" * 64), "at most 63"),
     (lambda t: t.update(id="x" * 26), "at most 25"),
     (lambda t: t.update(x=10**9), "less than or equal"),
     (lambda t: t["fields"][0].pop("type"), "type"),                                        # type de colonne absent
-    (lambda t: t["fields"][1].update(name=" "), "nom vide"),
+    (lambda t: t["fields"][1].update(name=" "), "nom ne peut pas être vide"),
     (lambda t: t["fields"][1].update(name="id"), "RG-10"),                                 # deux colonnes de même nom
     (lambda t: t["fields"][1].update(id="c_id"), "Identifiant en double"),
     (lambda t: t["fields"][1].update(id="t_client"), "Identifiant en double"),             # id de colonne = id de table
@@ -97,3 +98,46 @@ def test_pas_d_avertissement_avec_une_cle_primaire():
 
 def test_avertissement_pour_une_table_sans_colonne():
     assert _avertissement(TableAjout.model_validate({"id": "t1", "name": "vide"})).code == "TABLE_SANS_CLE_PRIMAIRE"
+
+# --- Règles de nommage (RG-10 précisée) et types (RG-11 précisée) ------------------------------------------
+
+@pytest.mark.parametrize("nom, message", [
+    ('a"b', "guillemet"),
+    ("a`b", "guillemet"),
+    ("a\tb", "caractère de contrôle"),
+    (" client", "espace"),
+    ("client ", "espace"),
+    ("é" * 32, "63 octets"),                     # 32 caractères mais 64 octets en UTF-8
+])
+def test_nom_de_table_inutilisable_refuse(nom, message):
+    with pytest.raises(ValidationError, match=message):
+        TableAjout.model_validate(_modifie(lambda t: t.update(name=nom)))
+
+
+def test_noms_de_colonnes_compares_sans_la_casse():
+    with pytest.raises(ValidationError, match="casse"):
+        TableAjout.model_validate(_modifie(lambda t: t["fields"][1].update(name="ID")))
+
+
+def test_nom_accentue_de_63_octets_accepte():
+    assert TableAjout.model_validate(_modifie(lambda t: t.update(name="é" * 31 + "a"))).name.startswith("é")
+
+
+@pytest.mark.parametrize("nom, code", [
+    ("select", "NOM_RESERVE"), ("USER", "NOM_RESERVE"), ("order", "NOM_RESERVE"),
+    ("Nom client", "NOM_A_PROTEGER"), ("1ere", "NOM_A_PROTEGER"), ("café", "NOM_A_PROTEGER"),
+])
+def test_avertissement_sur_le_nom_de_la_table(nom, code):
+    table = TableAjout.model_validate(_modifie(lambda t: t.update(name=nom)))
+    assert [a.code for a in avertissements_table(table)] == [code]
+
+
+def test_pas_d_avertissement_pour_un_nom_simple():
+    assert avertissements_table(TableAjout.model_validate(table_valide())) == []
+
+
+def test_types_admis_selon_le_dialecte():
+    assert "tinyint" not in types_admis("generic") and "tinyint" in types_admis("mysql")
+    assert "jsonb" in types_admis("postgresql") and "jsonb" not in types_admis("mysql")
+    assert {"int", "integer", "varchar"} <= types_admis("generic")
+    assert "humeur" in types_admis("generic", {"Humeur"})

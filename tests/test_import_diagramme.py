@@ -45,6 +45,10 @@ def _modifie(fonction):
     (lambda d: d["tables"][1].update(id=i("t_client")), "en double"),
     (lambda d: d["tables"][0]["indexes"][0].update(fieldIds=[i("c_cmd_id")]), "absentes de sa table"),
     (lambda d: d["relationships"][0].update(sourceCardinality="beaucoup"), "one"),
+    (lambda d: d["tables"][1].update(name="CLIENT"), "casse"),                              # RG-10 sans la casse
+    (lambda d: d["tables"][1].update(id=i("c_client_id")), "en double"),                    # id de table = id de colonne
+    (lambda d: d["tables"][0].update(name="   "), "nom ne peut pas être vide"),
+    (lambda d: d["tables"][0]["fields"][1].update(name='nom"'), "guillemet"),
 ])
 def test_diagramme_invalide(modification, message):
     with pytest.raises(ValidationError, match=message):

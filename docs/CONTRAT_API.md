@@ -28,7 +28,8 @@ Voir aussi : [`API.md`](API.md) (vue d'ensemble) et [`ARCHITECTURE.md`](ARCHITEC
 | Préfixe | `/api` pour toutes les routes, Swagger compris (`/api/docs`, `/api/redoc`, `/api/openapi.json`) |
 | Format | JSON, UTF-8. Les objets du schéma suivent le **format ChartDB** (noms en camelCase : `primaryKey`, `fieldIds`…) |
 | Identification | En-tête **`X-User-Id`** : l'UUID d'un utilisateur existant. **Provisoire** : il ne protège rien et disparaîtra avec le login. Absent, invalide ou inconnu : **401** |
-| Identifiants du schéma | Identifiants ChartDB (table, colonne, index, relation) : chaîne de **25 caractères au plus**, fournie par le navigateur, **jamais régénérée** par le serveur |
+| Identifiants du schéma | Identifiants ChartDB (table, colonne, index, relation) : chaîne de **25 caractères au plus**, fournie par le navigateur, **jamais régénérée** par le serveur. Un identifiant déjà utilisé est refusé, sauf pour **restaurer** une table supprimée du même projet (RG-09 précisée, voir l'ajout d'une table) |
+| Noms et types | Voir « Règles de nommage » et « Types de colonnes » au § 2 (RG-10 et RG-11 précisées) |
 | Autres identifiants | UUID (projet, import, utilisateur) |
 | Dates | Dans le diagramme renvoyé, `createdAt` et `updatedAt` sont des **millisecondes depuis 1970** (comme ChartDB) |
 | Droits | Vérifiés côté serveur à chaque requête. Un utilisateur qui ne participe pas au projet reçoit **403** |
@@ -75,12 +76,40 @@ suppression d'une table). Le serveur impose cette confirmation : elle ne dépend
 
 Les champs inconnus de ChartDB (par exemple `createdAt`) sont **acceptés et conservés** à la réception.
 
+### Règles de nommage (RG-10 précisée)
+
+Elles s'appliquent à l'ajout d'une table **et** à l'import (cahier des charges, § 3.3.1.4).
+
+| Niveau | Cas |
+|---|---|
+| **Refus (422)** | nom vide ou fait d'espaces ; espace au début ou à la fin ; caractère de contrôle (tabulation, NUL…) ; guillemet droit `"` ou accent grave `` ` `` ; plus de **63 octets** en UTF-8 (limite de PostgreSQL : un `é` compte 2 octets) |
+| **Refus (422)** | deux tables d'un même schéma SQL, ou deux colonnes d'une même table, portant le même nom **sans tenir compte de la casse** (`Client` et `client`) |
+| **Avertissement** `NOM_RESERVE` | nom de table ou de colonne qui est un mot réservé de MySQL 8.4 ou de PostgreSQL 16 (`select`, `user`, `order`…) : il devra être protégé par des guillemets dans les scripts |
+| **Avertissement** `NOM_A_PROTEGER` | nom de table ou de colonne hors `[A-Za-z0-9_]` ou commençant par un chiffre (`Nom client`, `café`, `1ere`) |
+
+Les mots réservés ne sont pas refusés : des noms comme `user` ou `order` sont courants dans les dumps réels (EX-14).
+Les listes sont dans `app/schemas/mots_reserves.py`, avec leur source.
+
+### Types de colonnes (RG-11 précisée)
+
+`type.id` est comparé **sans tenir compte de la casse** aux types de ChartDB v1.20.1 :
+
+| Dialecte du projet | Types admis |
+|---|---|
+| `generic` | types génériques de ChartDB (`int`, `varchar`, `text`, `boolean`, `date`, `timestamp`, `decimal`, `uuid`, `json`…) et les synonymes communs `integer`, `bool` |
+| `mysql` | les précédents et les types MySQL de ChartDB (`tinyint`, `mediumtext`, `year`…) |
+| `postgresql` | les types génériques et les types PostgreSQL de ChartDB (`jsonb`, `serial`, `timestamptz`…) avec leurs synonymes (`character varying`, `int4`…) |
+| tous | les types personnalisés du projet (`customTypes` de ChartDB, conservés dans `projet.annexes`) |
+
+À l'ajout d'une table, un type non admis donne un **422**. À l'import, il donne un avertissement `TYPE_INCONNU` sans
+bloquer l'import. La liste complète est dans `app/schemas/types_colonnes.py`.
+
 ### `DBTable`
 
 | Champ | Type | Obligatoire | Règle |
 |---|---|---|---|
 | `id` | texte | oui | 1 à 25 caractères |
-| `name` | texte | oui | 1 à 63 caractères, non vide après suppression des espaces |
+| `name` | texte | oui | 63 caractères et 63 octets au plus, règles de nommage ci-dessus |
 | `schema` | texte | non | schéma SQL, 63 caractères au plus |
 | `x`, `y` | nombre | non (0) | entre -999999,99 et 999999,99 |
 | `width` | nombre | non | idem |
@@ -95,8 +124,8 @@ Les champs inconnus de ChartDB (par exemple `createdAt`) sont **acceptés et con
 | Champ | Type | Obligatoire | Règle |
 |---|---|---|---|
 | `id` | texte | oui | 1 à 25 caractères |
-| `name` | texte | oui | 1 à 63 caractères, unique dans la table (RG-10) |
-| `type` | objet `{id, name?}` | **oui** | `type.id` : 30 caractères au plus (`integer`, `varchar`, `uuid`…) |
+| `name` | texte | oui | règles de nommage ci-dessus ; unique dans la table, sans tenir compte de la casse (RG-10) |
+| `type` | objet `{id, name?}` | **oui** | `type.id` : 30 caractères au plus, dans la liste admise pour le dialecte du projet (RG-11, ci-dessus) |
 | `primaryKey` | booléen | non (`false`) | |
 | `nullable` | booléen | non (**`true`**) | une clé primaire doit être non nullable (RG-12) |
 | `unique`, `increment` | booléen | non (`false`) | |
@@ -111,7 +140,7 @@ Les champs inconnus de ChartDB (par exemple `createdAt`) sont **acceptés et con
 | Champ | Type | Obligatoire | Règle |
 |---|---|---|---|
 | `id` | texte | oui | 1 à 25 caractères |
-| `name` | texte | oui | 1 à 63 caractères |
+| `name` | texte | oui | règles de nommage (refus seulement, sans avertissement) |
 | `fieldIds` | liste de textes | oui | identifiants de colonnes **de la même table**, sans doublon (RG-14) ; l'ordre est conservé |
 | `unique`, `isPrimaryKey` | booléen | non (`false`) | |
 | `type` | texte | non | 10 caractères au plus (`btree`, `hash`…) |
@@ -120,7 +149,7 @@ Les champs inconnus de ChartDB (par exemple `createdAt`) sont **acceptés et con
 
 | Champ | Type | Règle |
 |---|---|---|
-| `id`, `name` | texte | 25 et 63 caractères au plus |
+| `id`, `name` | texte | 25 caractères au plus pour `id` ; `name` suit les règles de nommage (refus seulement) |
 | `sourceTableId`, `targetTableId`, `sourceFieldId`, `targetFieldId` | texte | les colonnes source et cible sont **distinctes** et présentes dans le diagramme (RG-13) |
 | `sourceCardinality`, `targetCardinality` | `"one"` ou `"many"` | |
 
@@ -303,11 +332,18 @@ reçoit le diagramme (produit par ChartDB dans le navigateur), les caractéristi
 {
   "id_import": "b6005d51-2739-4363-a7ff-4a1825fb165f",
   "numero_sequence": 1,
-  "nb_elements_crees": 6
+  "nb_elements_crees": 6,
+  "avertissements": [
+    { "code": "NOM_RESERVE", "id_element": "tbl_user_001",
+      "message": "Le nom de table 'user' est un mot réservé de PostgreSQL : il devra être protégé par des guillemets dans les scripts SQL." }
+  ]
 }
 ```
 
 `nb_elements_crees` compte les tables, colonnes, index et relations ; il est **calculé par le serveur**.
+`avertissements` (toujours présent, liste vide si tout va bien) signale les noms réservés ou à protéger (RG-10) et les
+types inconnus du dialecte du dump (`TYPE_INCONNU`, RG-11). Ils ne bloquent pas l'import et sont aussi enregistrés dans
+le rapport (`import_dump.rapport.avertissements`). L'avertissement « table sans clé primaire » reste propre à l'ajout.
 
 **Comportement**
 
@@ -323,7 +359,7 @@ reçoit le diagramme (produit par ChartDB dans le navigateur), les caractéristi
 | Code | Cas |
 |---|---|
 | 401 | Utilisateur non identifié |
-| 422 | Diagramme ou corps invalide (voir ci-dessous) ; identifiant ChartDB déjà utilisé ; valeur refusée par la base |
+| 422 | Diagramme ou corps invalide (voir ci-dessous) ; identifiant ChartDB déjà utilisé (l'import exige des identifiants neufs) ; valeur refusée par la base |
 | 404 | Projet introuvable |
 | 403 | Non participant, ou participant non responsable |
 | 413 | Taille déclarée supérieure au maximum (`"Fichier trop volumineux (maximum 52428800 octets)."`) |
@@ -336,7 +372,8 @@ reçoit le diagramme (produit par ChartDB dans le navigateur), les caractéristi
 ```
 
 **422 : un diagramme est refusé quand** il ne contient aucune table, deux tables du même schéma SQL portent le même nom
-(RG-10), deux colonnes d'une table portent le même nom, une clé primaire est nullable (RG-12), une relation relie une
+à la casse près (RG-10), deux colonnes d'une table portent le même nom à la casse près, un nom enfreint les règles de
+nommage, une table et une colonne partagent un identifiant, une clé primaire est nullable (RG-12), une relation relie une
 colonne à elle-même ou cite une colonne absente (RG-13), un index cite deux fois la même colonne ou une colonne d'une
 autre table (RG-14), un identifiant est en double ou de plus de 25 caractères.
 
@@ -377,7 +414,9 @@ avec ses colonnes et ses index, attribue le numéro de séquence suivant du proj
   "table": { "id": "tbl_client_001", "name": "client", "x": 10.0, "y": 20.0, "isView": false,
              "fields": [ "…" ], "indexes": [ "…" ] },
   "numero_sequence": 1,
-  "avertissement": null
+  "avertissement": null,
+  "avertissements": [],
+  "restauree": false
 }
 ```
 
@@ -392,6 +431,26 @@ avec ses colonnes et ses index, attribue le numéro de séquence suivant du proj
 
 Une table sans aucune colonne est acceptée aussi, avec le même avertissement. L'avertissement n'est jamais bloquant.
 
+- `avertissements` : **toujours présent**, liste vide quand tout va bien. Il reprend `TABLE_SANS_CLE_PRIMAIRE` puis les
+  avertissements de nommage (`NOM_RESERVE`, `NOM_A_PROTEGER`), chacun avec l'`id_element` concerné. `avertissement` est
+  conservé tel quel pour le front existant.
+- `restauree` : `true` si la table reprend l'identifiant d'une **table supprimée du même projet** (voir ci-dessous).
+
+**Restauration d'une table supprimée (RG-09 précisée)**
+
+Pour qu'« annuler » une suppression fonctionne, une table dont l'`id` est celui d'une table **supprimée du même projet**
+est restaurée au lieu d'être refusée :
+
+- la table et les colonnes reprises redeviennent actives et prennent les valeurs reçues ; les colonnes nouvelles sont
+  ajoutées ; les anciennes colonnes absentes du corps restent supprimées ;
+- les index reçus remplacent ceux de l'ancienne table ; les anciens index absents du corps sont retirés (leur état passé
+  reste dans l'opération de suppression de la table) ;
+- les relations ne sont pas dans le corps : celles dont les deux colonnes sont de nouveau actives réapparaissent ;
+- l'opération inscrite est un `ajout` ; le nom doit être libre (RG-10).
+
+Tout autre identifiant déjà présent en base reste refusé (P3) : élément actif, élément d'un autre projet, colonne ou index
+d'une autre table.
+
 **Erreurs** (dans cet ordre : 401, 404, 403, 422)
 
 | Code | Cas |
@@ -399,9 +458,10 @@ Une table sans aucune colonne est acceptée aussi, avec le même avertissement. 
 | 401 | Utilisateur non identifié |
 | 404 | Projet introuvable |
 | 403 | N'est pas concepteur du projet (`"Seul un concepteur du projet peut modifier le schéma."`) |
-| 422 | Corps invalide : type de colonne absent, nom vide ou trop long, clé primaire nullable (RG-12), deux colonnes de même nom, index sur une colonne absente ou en double (RG-14), identifiant en double dans la table |
-| 422 | **Nom de table déjà pris** dans le projet, schéma SQL compris (RG-10) : `"Une table du projet porte déjà le nom 'client' (RG-10)."` |
-| 422 | **Identifiant ChartDB déjà utilisé** (table, colonne ou index, éléments supprimés compris, P3) : `"Identifiant ChartDB déjà utilisé : ['tbl_client_001'] (P3)."` |
+| 422 | Corps invalide : type de colonne absent, nom contraire aux règles de nommage, clé primaire nullable (RG-12), deux colonnes de même nom à la casse près, index sur une colonne absente ou en double (RG-14), identifiant en double dans la table |
+| 422 | **Nom de table déjà pris** dans le projet, schéma SQL compris, sans tenir compte de la casse (RG-10) : `"Une table du projet porte déjà le nom 'client' (sans tenir compte de la casse, RG-10)."` |
+| 422 | **Type de colonne non admis** pour le dialecte du projet (RG-11) : `"Type de colonne non reconnu pour un projet « generic » (f : 'tinyint') (RG-11)."` |
+| 422 | **Identifiant ChartDB déjà utilisé** hors restauration (P3) : `"Identifiant ChartDB déjà utilisé : ['tbl_client_001'] (P3). Seule une table supprimée de ce projet peut être restaurée, avec ses propres colonnes et index (RG-09)."` |
 | 422 | Valeur refusée par la base (caractère NUL) |
 
 Le 403 passe **avant** la validation du corps : un non-concepteur reçoit 403 même si sa table est invalide.
@@ -460,8 +520,7 @@ Le front affiche ces liens, demande la confirmation, puis renvoie la requête av
   (au format ChartDB), pour pouvoir la restituer dans l'historique.
 - Les relations et index liés **ne sont pas modifiés** : ils disparaissent du schéma renvoyé par
   `GET /api/projets/{id_projet}` avec leur table. Le **nom** de la table redevient libre (RG-10) ; son **identifiant**
-  reste pris (P3).
-- Aucune route ne permet de restaurer une table supprimée.
+  ne peut resservir que pour **restaurer** cette table, par `POST …/tables` (voir l'ajout d'une table).
 
 **Erreurs** (dans cet ordre : 401, 404 projet, 403, 422, 404 table, 409)
 
@@ -485,7 +544,7 @@ Le 403 passe avant le 404 de la table : un non-concepteur ne peut pas sonder les
 | `POST /api/projets` | 401 → 422 |
 | `GET /api/projets/{id}` | 401 → 404 → 403 |
 | `POST …/import` | 401 → 422 (corps) → 404 → 403 → 413 → 409 → écriture (422 si la base refuse) |
-| `POST …/tables` | 401 → 404 → 403 → 422 (corps) → 422 (nom, identifiants) → écriture |
+| `POST …/tables` | 401 → 404 → 403 → 422 (corps) → 422 (nom, types, identifiants) → écriture (ajout ou restauration) |
 | `DELETE …/tables/{id_table}` | 401 → 404 → 403 → 422 (paramètres) → 404 (table) → 409 → écriture |
 
 ---
@@ -503,7 +562,9 @@ Le dossier V1.2 fait foi. Ces points précisent ou complètent ce qu'il dit.
 | Confirmation sans lien | Exigée à chaque suppression, comme le diagramme du dossier (fig. 34). Le § 4.5.11 demande de le confirmer avec l'équipe |
 | Nom et description d'un projet | Espaces retirés ; description vide enregistrée à `null` (le dossier dit « vide si non donnée ») |
 | Nature d'événement `CREATION_PROJET` | Absente de la liste du chapitre 3 : à y ajouter |
-| RG-10 | Au sein d'un même schéma SQL (dossier, § 4.2.7) |
+| RG-10 | Au sein d'un même schéma SQL (dossier, § 4.2.7), **sans tenir compte de la casse** ; règles de nommage (refus et avertissements) d'après le cahier des charges, § 3.3.1.4 : à faire valider par le client |
+| RG-11 | Types de colonnes limités aux listes de ChartDB v1.20.1 selon le dialecte du projet (CU 2.1 étape 3) : 422 à l'ajout, avertissement à l'import |
+| RG-09 et P3 | Un identifiant supprimé peut resservir pour **restaurer** sa table dans le même projet (annuler une suppression) ; les autres cas restent refusés |
 | Version à l'import | Aucune (dossier, § 4.2.5) : `import_dump.id_version_produite` reste vide |
 | Prise de main (RG-29) | Non contrôlée (CU 2.6) |
 | Relations et index à la suppression d'une table | Non traités, ils disparaissent du schéma avec leur table (dossier, § 4.5.11) |
@@ -513,10 +574,12 @@ Le dossier V1.2 fait foi. Ces points précisent ou complètent ce qu'il dit.
 ## 6. Ce que le front doit savoir
 
 - **L'en-tête `X-User-Id` va dans les en-têtes HTTP**, pas dans le corps.
-- **Afficher les avertissements** : `avertissement` est présent dans chaque réponse d'ajout de table, même à `null`.
+- **Afficher les avertissements** : `avertissements` (liste) est présent dans chaque réponse d'ajout de table et d'import, même vide ; `avertissement` (un seul, clé primaire) reste présent pour compatibilité.
+- **Annuler une suppression** : renvoyer la table supprimée telle quelle par `POST …/tables` ; la réponse a `restauree: true`.
+- **Proposer les types** de la liste admise pour le dialecte du projet (l'éditeur ChartDB le fait déjà) : un autre type donne un 422.
 - **Gérer le 409** des deux routes de confirmation : afficher, demander, renvoyer avec le paramètre de confirmation.
 - **Un 422 de validation** a un `detail` en **liste** (champ par champ) ; un 422 métier a un `detail` en **texte**.
-- **Le front génère les identifiants ChartDB** : un identifiant déjà utilisé, même celui d'un élément supprimé, donne un 422.
+- **Le front génère les identifiants ChartDB** : un identifiant déjà utilisé donne un 422, sauf pour restaurer une table supprimée du même projet.
 - **L'ordre des colonnes** dans `fields` devient leur rang ; il est conservé à l'ouverture du projet.
 - **Pas de temps réel** pour l'instant : un ajout ou une suppression n'est pas poussé aux autres participants.
 - **Un dump n'est jamais envoyé** : seul le diagramme, le nom, le dialecte et la taille du fichier, et le rapport.

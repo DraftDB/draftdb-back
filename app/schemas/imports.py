@@ -4,6 +4,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.chartdb import Diagramme
+from app.schemas.regles import Avertissement
 
 
 class FichierImport(BaseModel):
@@ -39,3 +40,5 @@ class ImportResponse(BaseModel):
     id_import: UUID
     numero_sequence: int
     nb_elements_crees: int
+    # Non bloquants (EX-05) : noms réservés ou à protéger (RG-10), types inconnus du dialecte (RG-11).
+    avertissements: list[Avertissement]

@@ -1,4 +1,4 @@
-"""Ajout d'une table au schéma d'un projet (CU 2.1, DRAFTDB-42)."""
+"""Ajout (CU 2.1, DRAFTDB-42) et suppression (CU 2.3, DRAFTDB-43) d'une table du schéma d'un projet."""
 
 from uuid import UUID
 
@@ -9,54 +9,165 @@ from sqlalchemy.exc import DataError, IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.schemas.chartdb import Diagramme
-from app.schemas.tables import Avertissement, TableAjout
+from app.schemas.regles import avertissement_cle_primaire, avertissements_table
+from app.schemas.tables import TableAjout
+from app.schemas.types_colonnes import noms_types_personnalises, types_admis, types_inconnus
 from app.services.importer import construire_lignes
 from app.services.lecture import reconstituer_diagramme
 
+_INSERER_ELEMENT = "INSERT INTO element_schema (id_element, nature, id_projet) VALUES (:id, :nature, :projet)"
+_INSERER_COLONNE = """INSERT INTO colonne (id_element, nom, rang, type_donnee, taille, precision_num, echelle, nullable,
+                                           est_unique, cle_primaire, auto_increment, valeur_defaut, interclassement,
+                                           commentaire, id_table)
+                      VALUES (:id, :nom, :rang, :type_donnee, :taille, :precision_num, :echelle, :nullable, :est_unique,
+                              :cle_primaire, :auto_increment, :valeur_defaut, :interclassement, :commentaire, :id_table)"""
+_INSERER_INDEX = """INSERT INTO index_schema (id_index, nom, est_unique, type_index, est_cle_primaire, id_table)
+                    VALUES (:id, :nom, :est_unique, :type_index, :est_cle_primaire, :id_table)"""
+_INSERER_COLONNE_INDEX = "INSERT INTO colonne_index (id_index, id_colonne, rang) VALUES (:id_index, :id_colonne, :rang)"
+
+
+def _executer(db: Session, sql: str, lignes: list[dict]) -> None:
+    if lignes:
+        db.execute(text(sql), lignes)
+
 
 def _verifier_nom_libre(db: Session, id_projet: UUID, table: TableAjout) -> None:
-    """RG-10 : deux tables actives d'un même projet ne portent pas le même nom.
+    """RG-10 : deux tables actives d'un même projet ne portent pas le même nom, sans tenir compte de la casse.
 
     Même règle que l'import : le nom s'apprécie avec le schéma SQL de la table, absent ou vide
-    étant équivalents.
+    étant équivalents. « Client » et « client » sont la même table pour PostgreSQL et pour MySQL
+    sous Windows et macOS.
     """
     prise = db.execute(
         text("""SELECT 1 FROM table_schema t
                 JOIN element_schema e ON e.id_element = t.id_element
                 WHERE e.id_projet = :p AND e.date_suppression IS NULL
-                  AND t.nom = :nom AND COALESCE(t.schema_sql, '') = :schema"""),
+                  AND lower(t.nom) = lower(:nom) AND lower(COALESCE(t.schema_sql, '')) = lower(:schema)"""),
         {"p": id_projet, "nom": table.name, "schema": table.schema_sql or ""},
     ).first()
     if prise is not None:
-        raise HTTPException(status_code=422, detail=f"Une table du projet porte déjà le nom {table.name!r} (RG-10).")
+        raise HTTPException(status_code=422, detail=f"Une table du projet porte déjà le nom {table.name!r} "
+                                                    "(sans tenir compte de la casse, RG-10).")
 
 
-def _verifier_identifiants_libres(db: Session, table: TableAjout) -> None:
-    """P3 : les identifiants ChartDB sont gardés tels quels, un identifiant déjà utilisé est refusé.
+def _verifier_types(projet, table: TableAjout) -> None:
+    """CU 2.1 étape 3, RG-11 : le type de chaque colonne est choisi dans la liste admise pour le dialecte du projet.
 
-    Les éléments supprimés logiquement comptent : leur identifiant reste en base.
+    Projet « generic » : types génériques de ChartDB ; projet « mysql » ou « postgresql » : en plus, les types
+    du dialecte. Les types personnalisés du projet (annexes.customTypes) sont toujours admis.
     """
-    ids_elements = [table.id, *(champ.id for champ in table.fields)]
-    ids_index = [index.id for index in table.indexes]
-    utilises = db.execute(
-        text("SELECT id_element FROM element_schema WHERE id_element = ANY(:ids)"), {"ids": ids_elements}
-    ).scalars().all()
-    if ids_index:
-        utilises += db.execute(
-            text("SELECT id_index FROM index_schema WHERE id_index = ANY(:ids)"), {"ids": ids_index}
-        ).scalars().all()
-    if utilises:
-        raise HTTPException(status_code=422, detail=f"Identifiant ChartDB déjà utilisé : {sorted(utilises)} (P3).")
+    admis = types_admis(projet["type_base"], noms_types_personnalises((projet["annexes"] or {}).get("customTypes")))
+    inconnus = types_inconnus(table.fields, admis)
+    if inconnus:
+        liste = ", ".join(f"{champ.name} : {champ.type.id!r}" for champ in inconnus)
+        raise HTTPException(
+            status_code=422,
+            detail=f"Type de colonne non reconnu pour un projet « {projet['type_base']} » ({liste}) (RG-11).",
+        )
 
 
-def _avertissement(table: TableAjout) -> Avertissement | None:
-    """EX-05, RG-12 : une table sans clé primaire est acceptée, avec un avertissement."""
-    if any(champ.primary_key for champ in table.fields):
-        return None
-    return Avertissement(
-        code="TABLE_SANS_CLE_PRIMAIRE",
-        message=f"La table {table.name!r} n'a aucune colonne clé primaire (RG-12).",
+def _restauration(db: Session, id_projet: UUID, table: TableAjout) -> bool:
+    """P3 et RG-09 précisée : un identifiant ChartDB déjà utilisé est refusé, sauf pour restaurer une table supprimée.
+
+    Renvoie True si la table reprend l'identifiant d'une table supprimée logiquement **du même projet** (annuler
+    une suppression, par exemple). Ses colonnes et ses index peuvent alors reprendre leurs anciens identifiants ;
+    tout autre identifiant déjà présent en base (élément actif, autre projet, autre table) est refusé (422).
+    """
+    existants = {
+        r["id_element"]: r
+        for r in db.execute(
+            text("""SELECT e.id_element, e.nature, e.id_projet, e.date_suppression, c.id_table
+                    FROM element_schema e LEFT JOIN colonne c ON c.id_element = e.id_element
+                    WHERE e.id_element = ANY(:ids)"""),
+            {"ids": [table.id, *(champ.id for champ in table.fields)]},
+        ).mappings()
+    }
+    ancienne = existants.get(table.id)
+    restauration = (
+        ancienne is not None and ancienne["nature"] == "TABLE"
+        and ancienne["id_projet"] == id_projet and ancienne["date_suppression"] is not None
     )
+    refuses = [] if ancienne is None or restauration else [table.id]
+    for champ in table.fields:
+        colonne = existants.get(champ.id)
+        if colonne is not None and not (
+            restauration and colonne["nature"] == "COLONNE" and colonne["id_table"] == table.id
+            and colonne["date_suppression"] is not None
+        ):
+            refuses.append(champ.id)
+    ids_index = [index.id for index in table.indexes]
+    if ids_index:
+        for id_index, id_table in db.execute(
+            text("SELECT id_index, id_table FROM index_schema WHERE id_index = ANY(:ids)"), {"ids": ids_index}
+        ).all():
+            if not (restauration and id_table == table.id):
+                refuses.append(id_index)
+    if refuses:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Identifiant ChartDB déjà utilisé : {sorted(refuses)} (P3). Seule une table supprimée de ce projet "
+                   "peut être restaurée, avec ses propres colonnes et index (RG-09).",
+        )
+    return restauration
+
+
+def _inserer(db: Session, lignes) -> None:
+    """Nouvelle table : la table, ses colonnes et ses index sont insérés."""
+    _executer(db, _INSERER_ELEMENT, lignes.elements)
+    _executer(db, """INSERT INTO table_schema (id_element, nom, schema_sql, position_x, position_y, largeur, couleur,
+                                               commentaire, est_vue)
+                     VALUES (:id, :nom, :schema_sql, :x, :y, :largeur, :couleur, :commentaire, :est_vue)""", lignes.tables)
+    _executer(db, _INSERER_COLONNE, lignes.colonnes)
+    _executer(db, _INSERER_INDEX, lignes.index)
+    _executer(db, _INSERER_COLONNE_INDEX, lignes.colonnes_index)
+
+
+def _restaurer(db: Session, id_table: str, lignes) -> None:
+    """Table supprimée reprise (RG-09, RG-15 précisées) : le corps reçu devient l'état de la table.
+
+    - La table et les colonnes reprises redeviennent actives (date_suppression vidée) et prennent les valeurs reçues ;
+      les colonnes nouvelles sont insérées ; les anciennes colonnes absentes du corps restent supprimées.
+    - Les index reçus remplacent ceux de l'ancienne table. Les anciens index absents du corps sont retirés : un index
+      n'a pas d'historique propre, son état passé reste dans l'opération de suppression de la table (donnees_avant).
+    - Les relations ne sont pas dans le corps : celles dont les deux colonnes sont de nouveau actives réapparaissent,
+      ce qui est le comportement attendu d'une annulation.
+    """
+    ids_colonnes = [c["id"] for c in lignes.colonnes]
+    reprises = set(db.execute(
+        text("SELECT id_element FROM colonne WHERE id_table = :t AND id_element = ANY(:ids)"),
+        {"t": id_table, "ids": ids_colonnes},
+    ).scalars())
+    db.execute(
+        text("UPDATE element_schema SET date_suppression = NULL WHERE id_element = ANY(:ids)"),
+        {"ids": [id_table, *reprises]},
+    )
+    _executer(db, """UPDATE table_schema SET nom = :nom, schema_sql = :schema_sql, position_x = :x, position_y = :y,
+                            largeur = :largeur, couleur = :couleur, commentaire = :commentaire, est_vue = :est_vue
+                     WHERE id_element = :id""", lignes.tables)
+    _executer(db, """UPDATE colonne SET nom = :nom, rang = :rang, type_donnee = :type_donnee, taille = :taille,
+                            precision_num = :precision_num, echelle = :echelle, nullable = :nullable,
+                            est_unique = :est_unique, cle_primaire = :cle_primaire, auto_increment = :auto_increment,
+                            valeur_defaut = :valeur_defaut, interclassement = :interclassement,
+                            commentaire = :commentaire
+                     WHERE id_element = :id""", [c for c in lignes.colonnes if c["id"] in reprises])
+    _executer(db, _INSERER_ELEMENT, [e for e in lignes.elements if e["nature"] == "COLONNE" and e["id"] not in reprises])
+    _executer(db, _INSERER_COLONNE, [c for c in lignes.colonnes if c["id"] not in reprises])
+
+    ids_index = [i["id"] for i in lignes.index]
+    db.execute(  # anciens index absents du corps (colonne_index suit par ON DELETE CASCADE)
+        text("DELETE FROM index_schema WHERE id_table = :t AND NOT (id_index = ANY(:ids))"),
+        {"t": id_table, "ids": ids_index},
+    )
+    anciens = set(db.execute(
+        text("SELECT id_index FROM index_schema WHERE id_table = :t"), {"t": id_table}
+    ).scalars())
+    if anciens:
+        db.execute(text("DELETE FROM colonne_index WHERE id_index = ANY(:ids)"), {"ids": list(anciens)})
+    _executer(db, """UPDATE index_schema SET nom = :nom, est_unique = :est_unique, type_index = :type_index,
+                            est_cle_primaire = :est_cle_primaire
+                     WHERE id_index = :id""", [i for i in lignes.index if i["id"] in anciens])
+    _executer(db, _INSERER_INDEX, [i for i in lignes.index if i["id"] not in anciens])
+    _executer(db, _INSERER_COLONNE_INDEX, lignes.colonnes_index)
 
 
 def ajouter_table(db: Session, projet, id_utilisateur: UUID, table: TableAjout) -> dict:
@@ -66,7 +177,10 @@ def ajouter_table(db: Session, projet, id_utilisateur: UUID, table: TableAjout) 
     a déjà été contrôlé (routers/tables.py). Les écritures forment un bloc indivisible ; cette fonction
     n'appelle pas commit() : c'est la route qui valide la transaction, une seule fois, à la fin.
 
-    Renvoie la table telle qu'elle est enregistrée, le numéro de séquence de l'opération et l'avertissement.
+    Si la table reprend l'identifiant d'une table supprimée du même projet, elle est restaurée (RG-09 précisée).
+
+    Renvoie la table telle qu'elle est enregistrée, le numéro de séquence de l'opération, les avertissements
+    et l'indication de restauration.
     """
     id_projet = projet["id_projet"]
 
@@ -79,36 +193,13 @@ def ajouter_table(db: Session, projet, id_utilisateur: UUID, table: TableAjout) 
     try:
         # Les vérifications lisent la base : une valeur qu'elle refuse (NUL) les fait échouer comme une écriture.
         _verifier_nom_libre(db, id_projet, table)
-        _verifier_identifiants_libres(db, table)
+        _verifier_types(projet, table)
+        restauree = _restauration(db, id_projet, table)
 
-        db.execute(
-            text("INSERT INTO element_schema (id_element, nature, id_projet) VALUES (:id, :nature, :projet)"),
-            lignes.elements,
-        )
-        db.execute(
-            text("""INSERT INTO table_schema (id_element, nom, schema_sql, position_x, position_y, largeur, couleur, commentaire, est_vue)
-                    VALUES (:id, :nom, :schema_sql, :x, :y, :largeur, :couleur, :commentaire, :est_vue)"""),
-            lignes.tables,
-        )
-        if lignes.colonnes:
-            db.execute(
-                text("""INSERT INTO colonne (id_element, nom, rang, type_donnee, taille, precision_num, echelle, nullable, est_unique,
-                                             cle_primaire, auto_increment, valeur_defaut, interclassement, commentaire, id_table)
-                        VALUES (:id, :nom, :rang, :type_donnee, :taille, :precision_num, :echelle, :nullable, :est_unique,
-                                :cle_primaire, :auto_increment, :valeur_defaut, :interclassement, :commentaire, :id_table)"""),
-                lignes.colonnes,
-            )
-        if lignes.index:
-            db.execute(
-                text("""INSERT INTO index_schema (id_index, nom, est_unique, type_index, est_cle_primaire, id_table)
-                        VALUES (:id, :nom, :est_unique, :type_index, :est_cle_primaire, :id_table)"""),
-                lignes.index,
-            )
-        if lignes.colonnes_index:
-            db.execute(
-                text("INSERT INTO colonne_index (id_index, id_colonne, rang) VALUES (:id_index, :id_colonne, :rang)"),
-                lignes.colonnes_index,
-            )
+        if restauree:
+            _restaurer(db, table.id, lignes)
+        else:
+            _inserer(db, lignes)
 
         db.execute(
             text("UPDATE projet SET numero_sequence = :seq WHERE id_projet = :p"),
@@ -130,8 +221,11 @@ def ajouter_table(db: Session, projet, id_utilisateur: UUID, table: TableAjout) 
             detail=f"Table refusée : identifiant déjà utilisé ou contrainte du schéma violée ({contrainte}).",
         )
 
-    return {"table": enregistree, "numero_sequence": numero_sequence, "avertissement": _avertissement(table)}
-
+    return {
+        "table": enregistree, "numero_sequence": numero_sequence,
+        "avertissement": avertissement_cle_primaire(table), "avertissements": avertissements_table(table),
+        "restauree": restauree,
+    }
 
 
 def _table_active(db: Session, id_projet: UUID, id_table: str) -> bool:

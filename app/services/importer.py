@@ -16,7 +16,31 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.schemas.chartdb import Diagramme
 from app.schemas.imports import ImportRequest, ImportResponse
+from app.schemas.regles import Avertissement, avertissements_noms
+from app.schemas.types_colonnes import noms_types_personnalises, types_admis, types_inconnus
 from app.services.acces import charger_projet, exiger_participant, exiger_responsable
+
+
+def avertissements_import(diagramme: Diagramme, dialecte: str) -> list[Avertissement]:
+    """Avertissements non bloquants de l'import (EX-05) : noms (RG-10) et types (RG-11).
+
+    Un type absent de la liste admise pour le dialecte du dump n'empêche pas l'import (EX-14) : l'analyseur de
+    ChartDB a pu garder un type qu'il ne connaît pas (extension PostgreSQL, par exemple). Il est signalé pour être
+    corrigé dans l'éditeur. L'avertissement « table sans clé primaire » reste propre à l'ajout (dossier, § 5.6.3).
+    """
+    admis = types_admis(dialecte, noms_types_personnalises(diagramme.custom_types))
+    avertissements = []
+    for table in diagramme.tables:
+        avertissements += avertissements_noms(table)
+        avertissements += [
+            Avertissement(
+                code="TYPE_INCONNU", id_element=champ.id,
+                message=f"Le type {champ.type.id!r} de la colonne {table.name}.{champ.name} n'est pas un type "
+                        f"{dialecte} reconnu par DraftDB : à corriger dans l'éditeur (RG-11).",
+            )
+            for champ in types_inconnus(table.fields, admis)
+        ]
+    return avertissements
 
 
 @dataclass
@@ -105,6 +129,7 @@ def importer_diagramme(db: Session, id_projet: UUID, id_utilisateur: UUID, reque
 
     diagramme = requete.diagramme
     lignes = construire_lignes(diagramme, id_projet)
+    avertissements = avertissements_import(diagramme, requete.fichier.dialecte)
     numero_sequence = projet["numero_sequence"] + 1
 
     try:
@@ -142,7 +167,8 @@ def importer_diagramme(db: Session, id_projet: UUID, id_utilisateur: UUID, reque
         # L'import ne crée pas de version (dossier, § 4.2.5 et 4.2.9, RG-17) : si le responsable veut figer
         # l'état importé, il crée lui-même une version nommée (CU 3.1). id_version_produite reste donc vide.
         # Le rapport est complété par le serveur (P2) : il compte lui-même les éléments créés.
-        rapport = {"elements_crees": resume, "non_repris": [i.model_dump() for i in requete.rapport.non_repris]}
+        rapport = {"elements_crees": resume, "non_repris": [i.model_dump() for i in requete.rapport.non_repris],
+                   "avertissements": [a.model_dump() for a in avertissements]}
         id_import = db.execute(
             text(
                 """INSERT INTO import_dump (nom_fichier, dialecte, taille_octets, nb_elements_crees, rapport, id_projet,
@@ -170,4 +196,5 @@ def importer_diagramme(db: Session, id_projet: UUID, id_utilisateur: UUID, reque
             detail=f"Diagramme refusé : identifiant déjà utilisé ou contrainte du schéma violée ({contrainte}).",
         )
 
-    return ImportResponse(id_import=id_import, numero_sequence=numero_sequence, nb_elements_crees=lignes.nb_elements)
+    return ImportResponse(id_import=id_import, numero_sequence=numero_sequence, nb_elements_crees=lignes.nb_elements,
+                          avertissements=avertissements)

@@ -139,6 +139,10 @@ python -m pytest tests/test_x.py -v        # un fichier
   `import_dump`), collaboration (`discussion`, `message`, `prise_de_main`).
 - Identifiants des tables, colonnes, index et relations : **id ChartDB, `VARCHAR(25)`**, fournis par le
   navigateur et jamais régénérés. Les autres identifiants sont des UUID. Dates en `TIMESTAMPTZ`.
+- Noms (RG-10 précisée, `app/schemas/regles.py`) : refus si vide, bordé d'espaces, caractère de contrôle, guillemet ou
+  plus de 63 octets ; unicité **sans tenir compte de la casse** ; avertissement pour un mot réservé ou un nom à protéger.
+- Types de colonnes (RG-11 précisée, `app/schemas/types_colonnes.py`) : listes de ChartDB v1.20.1 selon le dialecte du
+  projet ; 422 à l'ajout, avertissement à l'import.
 - Seul `element_schema` (tables et colonnes) porte `date_suppression` : la visibilité d'un index ou d'une
   relation dépend de sa table ou de sa colonne.
 - Les règles de gestion (RG-xx) sont portées par des `CHECK`, des `UNIQUE` et un index partiel ; les autres
@@ -149,7 +153,8 @@ python -m pytest tests/test_x.py -v        # un fichier
 
 - **P1** Le serveur reçoit et renvoie les objets au format JSON de ChartDB.
 - **P2** Le serveur fait foi : droits, règles et numéros de séquence vérifiés ou calculés côté serveur.
-- **P3** Les identifiants ChartDB sont conservés tels quels ; un identifiant déjà utilisé est refusé (422).
+- **P3** Les identifiants ChartDB sont conservés tels quels ; un identifiant déjà utilisé est refusé (422), sauf pour
+  **restaurer** une table supprimée du même projet (RG-09 précisée, « annuler » une suppression).
 - **P4** Rien ne s'efface : suppressions **logiques**, historique et décisions conservés.
 - **P5** Les projets sont « generic » ; le dialecte n'est choisi qu'à l'import, à l'export ou à la migration.
 - **P6** Aucune donnée vers un service extérieur ; un dump importé n'est jamais conservé (RG-24).

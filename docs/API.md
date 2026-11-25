@@ -62,9 +62,9 @@ curl -s -X DELETE "http://127.0.0.1:8000/api/projets/<id_projet>/tables/tbl_exem
 
 Sous PowerShell, préférer Swagger : l'écriture des guillemets JSON y est pénible.
 
-> Les identifiants ChartDB (`tbl_exemple_01`, `col_exemple_id`) ne peuvent servir **qu'une seule fois** dans toute la base,
-> même après une suppression de la table (principe P3). Pour rejouer l'exemple, changer les identifiants, ou repartir d'une
-> base neuve (`docker compose down -v`).
+> Les identifiants ChartDB (`tbl_exemple_01`, `col_exemple_id`) sont uniques dans toute la base (principe P3). Après
+> la suppression de la table, renvoyer **la même table** la restaure (`"restauree": true`, RG-09 précisée) ; pour créer
+> une autre table, changer les identifiants.
 
 ---
 
@@ -75,8 +75,8 @@ Sous PowerShell, préférer Swagger : l'écriture des guillemets JSON y est pén
 | `GET /api/health` | — | public | 200 `{status, database}` |
 | `POST /api/projets` | CU 1.1 Créer un projet | utilisateur identifié | 201 le projet |
 | `GET /api/projets/{id_projet}` | CU 1.6 Ouvrir un projet | participant | 200 le projet et son diagramme |
-| `POST /api/projets/{id_projet}/import` | CU 1.5 Importer le dump d'une base existante | responsable | 201 `{id_import, numero_sequence, nb_elements_crees}` |
-| `POST /api/projets/{id_projet}/tables` | CU 2.1 Ajouter une table | concepteur | 201 `{table, numero_sequence, avertissement}` |
+| `POST /api/projets/{id_projet}/import` | CU 1.5 Importer le dump d'une base existante | responsable | 201 `{id_import, numero_sequence, nb_elements_crees, avertissements}` |
+| `POST /api/projets/{id_projet}/tables` | CU 2.1 Ajouter une table (ou restaurer une table supprimée) | concepteur | 201 `{table, numero_sequence, avertissement, avertissements, restauree}` |
 | `DELETE /api/projets/{id_projet}/tables/{id_table}` | CU 2.3 Supprimer une table | concepteur | 200 `{id_table, numero_sequence}` (après un 409 de confirmation) |
 
 ### Droits d'accès
@@ -111,7 +111,7 @@ cahier des charges. Légende : ✅ réalisé, 🟡 partiel, ⬜ à faire.
 | EX-14 | Démarrer un projet depuis le dump d'une base existante | Must | CU 1.5 | ✅ | `POST …/import` |
 | EX-15 | Migration produite uniquement depuis une version approuvée | Must | CU 3.4 à 3.6 | ⬜ | |
 | EX-02 | Voir qui travaille et sur quelle partie | Should | CU 2.1, 2.2 | ⬜ | |
-| EX-05 | Être prévenu quand une modification pose problème | Should | CU 2.1 à 2.5 | 🟡 | Avertissement « table sans clé primaire » à l'ajout ; vérification complète à faire |
+| EX-05 | Être prévenu quand une modification pose problème | Should | CU 2.1 à 2.5 | 🟡 | Avertissements « table sans clé primaire » (ajout), mots réservés et noms à protéger (ajout et import), types inconnus (import) ; vérification complète à faire |
 | EX-07 | Retrouver l'état du schéma à une date antérieure | Should | CU 1.6, 3.1 à 3.3 | 🟡 | Ouverture du dernier état ; versions à faire |
 | EX-10 | Commenter une table ou une colonne | Should | CU 2.8, 2.9 | ⬜ | |
 | EX-16 | Prendre la main | Should | CU 2.6, 2.7 | ⬜ | |
