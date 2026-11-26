@@ -23,6 +23,12 @@ def creer_projet(db: Session, id_utilisateur: UUID, nom: str, description: str |
     Renvoie la ligne du projet créé. Lève 422 si la base refuse une valeur (caractère NUL, par exemple).
     """
     try:
+        if db.execute(text("SELECT nom FROM projet WHERE nom=:n;"), {"n": nom}).first():
+            raise HTTPException(
+                status_code=422,
+                detail="Projet refusé : une valeur n'est pas acceptée par la base (caractère NUL ou nom déjà existant, par exemple).",
+            )
+   
         projet = db.execute(
             text("""INSERT INTO projet (nom, description, id_responsable)
                     VALUES (:nom, :description, :u)
@@ -47,6 +53,6 @@ def creer_projet(db: Session, id_utilisateur: UUID, nom: str, description: str |
         db.rollback()
         raise HTTPException(
             status_code=422,
-            detail="Projet refusé : une valeur n'est pas acceptée par la base (caractère NUL, par exemple).",
+            detail="Projet refusé : une valeur n'est pas acceptée par la base (caractère NUL ou nom déjà existant, par exemple).",
         )
     return dict(projet)
