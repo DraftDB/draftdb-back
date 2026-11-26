@@ -73,7 +73,7 @@ def test_projet_ouvrable_par_son_createur(client_db, monde):
 def test_deux_projets_de_meme_nom(client_db, monde):
     a = _creer(client_db, monde, {"nom": "Doublon"})
     b = _creer(client_db, monde, {"nom": "Doublon"})
-    assert a.status_code == b.status_code == 201 and a.json()["id_projet"] != b.json()["id_projet"]
+    assert a.status_code == 201 and b.status_code == 422
 
 
 @pytest.mark.parametrize("en_tetes", [{}, {"X-User-Id": "pas-un-uuid"}, {"X-User-Id": str(uuid4())}])
